@@ -23,8 +23,8 @@
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/zhang1590424-rgb/xiaobai-trainer.git
-cd xiaobai-trainer
+git clone https://github.com/zhang1590424-rgb/myna.git
+cd myna
 
 # 2. 安装环境（创建虚拟环境 + 安装依赖 + 下载 LLaMA-Factory 训练引擎）
 bash scripts/install.command
@@ -64,7 +64,7 @@ bash scripts/start.command
 后续只需启动服务：
 
 ```bash
-cd xiaobai-trainer
+cd myna
 bash scripts/start.command
 ```
 
@@ -75,7 +75,7 @@ bash scripts/start.command
 ### 当前能力
 
 - **五步向导**：选方向 → 上传数据 → 确认设置 → 训练 → 对比试用
-- **模型下载**：从 ModelScope 国内源下载 Qwen2.5 系列小模型
+- **模型下载**：从 ModelScope 国内源下载 Qwen3.5 系列小模型
 - **数据校验**：支持 CSV / JSON / JSONL / XLSX 格式
 - **真实训练**：调用 LLaMA-Factory 做 LoRA SFT，支持快速/标准/精细三档
 - **对比推理**：训练前后同时推理对比效果

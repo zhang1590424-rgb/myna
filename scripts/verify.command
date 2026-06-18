@@ -36,7 +36,7 @@ if lsof -i TCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
   printf '[verify] 端口 %s 已有服务，复用它做 API 检查。\n' "$PORT"
 else
   printf '[verify] 临时启动本地服务。\n'
-  "$PYTHON" -m uvicorn local_trainer.main:app --host "$HOST" --port "$PORT" >/tmp/xiaobai-trainer-verify.log 2>&1 &
+  "$PYTHON" -m uvicorn local_trainer.main:app --host "$HOST" --port "$PORT" >/tmp/myna-verify.log 2>&1 &
   STARTED_PID=$!
 fi
 
