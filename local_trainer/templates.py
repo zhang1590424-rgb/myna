@@ -194,29 +194,23 @@ def get_template(template_id: str) -> TemplatePreset:
 
 TRAINING_PRESETS: list[TrainingPreset] = [
     TrainingPreset(
-        id="few",
-        title="数据较少",
-        description="20 条以内，让模型反复多学几遍才看得出效果。",
-        min_rows=0,
-        max_rows=20,
-        params=ExperimentParams(epochs=15, learning_rate=0.0002, lora_rank=8, batch_size=2, grad_accum=1),
+        id="fast",
+        title="快速",
+        description="几分钟跑完，先体验流程、看个大概方向。",
+        params=ExperimentParams(epochs=4, learning_rate=0.0002, lora_rank=8, batch_size=2, grad_accum=2),
     ),
     TrainingPreset(
-        id="normal",
-        title="数据适中",
-        description="20–100 条，效果和速度平衡，大多数情况用这个。",
+        id="standard",
+        title="标准",
+        description="稳妥默认，效果和耗时平衡，适合大多数情况。",
         recommended=True,
-        min_rows=21,
-        max_rows=100,
         params=ExperimentParams(epochs=10, learning_rate=0.0002, lora_rank=16, batch_size=2, grad_accum=2),
     ),
     TrainingPreset(
-        id="many",
-        title="数据较多",
-        description="100 条以上，适当收敛，防止学过头。",
-        min_rows=101,
-        max_rows=None,
-        params=ExperimentParams(epochs=6, learning_rate=0.0001, lora_rank=16, batch_size=2, grad_accum=4),
+        id="fine",
+        title="精细",
+        description="充分训练，耗时更长，想把效果调到最好时用。",
+        params=ExperimentParams(epochs=20, learning_rate=0.0001, lora_rank=16, batch_size=2, grad_accum=2),
     ),
 ]
 
@@ -230,15 +224,6 @@ def get_training_preset(preset_id: str) -> TrainingPreset:
         if preset.id == preset_id:
             return preset
     raise KeyError(preset_id)
-
-
-def preset_for_row_count(row_count: int) -> TrainingPreset:
-    """根据数据条数选出最合适的档位。"""
-    for preset in TRAINING_PRESETS:
-        upper = preset.max_rows if preset.max_rows is not None else float("inf")
-        if preset.min_rows <= row_count <= upper:
-            return preset
-    return TRAINING_PRESETS[1]  # 兜底：数据适中
 
 
 def sample_csv_for_template(template_id: str) -> str:

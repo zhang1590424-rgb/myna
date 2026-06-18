@@ -65,7 +65,7 @@ class DatasetManager:
             valid_count=parsed.valid_count,
             skipped_count=parsed.skipped_count,
             warnings=parsed.warnings,
-            preview=[record.model_dump() for record in parsed.preview],
+            preview=[record.model_dump(exclude_none=True) for record in parsed.preview],
             human_summary=parsed.human_summary,
         )
 
@@ -89,7 +89,7 @@ class DatasetManager:
             valid_count=parsed.valid_count,
             skipped_count=parsed.skipped_count,
             warnings=parsed.warnings,
-            preview=[record.model_dump() for record in parsed.preview],
+            preview=[record.model_dump(exclude_none=True) for record in parsed.preview],
             human_summary=parsed.human_summary,
         )
 

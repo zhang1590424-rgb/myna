@@ -112,10 +112,11 @@ TrainingMethod = Literal["sft", "dpo"]
 
 
 class ExperimentParams(BaseModel):
-    epochs: int = Field(default=3, ge=1, le=10)
+    epochs: int = Field(default=10, ge=1, le=30)
     learning_rate: float = Field(default=0.0002, gt=0, le=0.01)
-    lora_rank: int = Field(default=8, ge=1, le=64)
+    lora_rank: int = Field(default=16, ge=1, le=64)
     batch_size: int = Field(default=2, ge=1, le=16)
+    grad_accum: int = Field(default=2, ge=1, le=16)  # 梯度累积步数，小数据用小值多走几步
     beta: float = Field(default=0.1, gt=0, le=1.0)  # DPO preference strength
 
 
@@ -227,6 +228,11 @@ class ComparePromptRequest(BaseModel):
 class LabCompareChatRequest(BaseModel):
     prompt: str
     max_new_tokens: int = 120
+    style: str | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    repetition_penalty: float | None = None
+    no_repeat_ngram_size: int | None = None
 
 
 class LabCompareChatResponse(BaseModel):

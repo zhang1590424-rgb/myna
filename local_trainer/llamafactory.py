@@ -156,7 +156,7 @@ class LlamaFactoryConfigBuilder:
             "save_only_model": False,
             "report_to": "none",
             "per_device_train_batch_size": params.batch_size,
-            "gradient_accumulation_steps": 8,
+            "gradient_accumulation_steps": params.grad_accum,
             "learning_rate": params.learning_rate,
             "num_train_epochs": float(params.epochs),
             "lr_scheduler_type": "cosine",

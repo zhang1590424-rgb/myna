@@ -21,7 +21,7 @@ from .downloader import ModelDownloader
 from .engine import build_engine
 from .environment import collect_environment_status
 from .experiment_service import ExperimentService
-from .inference_engine import InferenceEngine
+from .inference_engine import InferenceEngine, resolve_gen_params
 from .model_registry import get_model, get_model_catalog
 from .paths import WEB_DIR, ensure_runtime_dirs
 from .persistence import Database
@@ -315,8 +315,17 @@ async def lab_chat(request: LabChatRequest):
 
 @app.post("/api/lab/compare-chat")
 async def lab_compare_chat(request: LabCompareChatRequest):
+    gen_params = resolve_gen_params(
+        request.style,
+        {
+            "temperature": request.temperature,
+            "top_p": request.top_p,
+            "repetition_penalty": request.repetition_penalty,
+            "no_repeat_ngram_size": request.no_repeat_ngram_size,
+        },
+    )
     try:
-        result = await lab.compare_chat(request.prompt, request.max_new_tokens)
+        result = await lab.compare_chat(request.prompt, request.max_new_tokens, gen_params)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
     except RuntimeError as exc:

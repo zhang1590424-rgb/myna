@@ -1,4 +1,4 @@
-# 小白训练师 — Python 依赖
+# Myna — Python 依赖
 # 安装：python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 # 注意：llamafactory 通常从本地 LLaMA-Factory/ 源码安装：
 #   .venv/bin/pip install -e ./LLaMA-Factory

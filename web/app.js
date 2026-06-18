@@ -28,6 +28,8 @@ const state = {
   downloadTimers: {},
   labResults: [],       // 缓存测评对比结果
   labPending: false,    // 是否有进行中的请求
+  labStyle: "balanced", // 回答风格档位：steady / balanced / lively
+  labAdvanced: {},      // 高级参数覆盖（留空则用档位默认）
 };
 
 /* ---------------- API helper ---------------- */
@@ -497,15 +499,17 @@ function renderNewExperiment(cloneFromId) {
   };
   const sourceParams = source ? { ...source.params } : null;
 
-  canvas.appendChild(
+  const view = el("div", { class: "form-view" });
+  canvas.appendChild(view);
+  view.appendChild(
     el("button", { class: "back-link", onClick: () => navigate("/experiments") }, "← 返回实验列表")
   );
-  canvas.appendChild(
+  view.appendChild(
     el("h1", { class: "view-title" }, source ? "克隆实验" : "新建实验")
   );
 
   const page = el("div", { class: "form-page" });
-  canvas.appendChild(page);
+  view.appendChild(page);
 
   if (source) {
     page.appendChild(
@@ -672,13 +676,14 @@ function renderNewExperiment(cloneFromId) {
     advanced.appendChild(el("summary", {}, "展开调整高级参数"));
     clear(paramGrid);
     const specs = [
-      ["epochs", "训练轮数", 1, 10, 1],
-      ["learning_rate", "学习率", 0.00001, 0.01, 0.00001],
-      ["lora_rank", "LoRA rank", 1, 64, 1],
-      ["batch_size", "批大小", 1, 16, 1],
+      ["epochs", "训练轮数", 1, 30, 1, "同样的数据反复学几遍。越多学得越透，但太多会死记硬背。"],
+      ["learning_rate", "学习率", 0.00001, 0.01, 0.00001, "每次调整的步子大小。太大容易学跑偏，太小学得慢。"],
+      ["lora_rank", "LoRA rank", 1, 64, 1, "给模型多大的“学习空间”。越大能学的越多，也更吃资源。"],
+      ["batch_size", "批大小", 1, 16, 1, "一次同时看几条数据。越大越稳，但更占内存。"],
+      ["grad_accum", "梯度累积步数", 1, 16, 1, "攒几批再更新一次模型。数据少就调小，模型学得更勤。"],
     ];
-    if (form.method === "dpo") specs.push(["beta", "偏好强度 beta", 0.01, 1, 0.01]);
-    for (const [key, label, min, max, step] of specs) {
+    if (form.method === "dpo") specs.push(["beta", "偏好强度 beta", 0.01, 1, 0.01, "多看重“更好/更差”的差距。越大越贴近你的偏好，太大易学偏。"]);
+    for (const [key, label, min, max, step, hint] of specs) {
       const changed =
         sourceParams && Number(sourceParams[key]) !== Number(form.params[key]);
       const labelNode = el("label", {}, [
@@ -701,7 +706,9 @@ function renderNewExperiment(cloneFromId) {
           paintAdvanced();
         },
       });
-      paramGrid.appendChild(el("div", {}, [labelNode, input]));
+      paramGrid.appendChild(
+        el("div", {}, [labelNode, input, el("p", { class: "param-hint" }, hint)])
+      );
     }
     advanced.appendChild(paramGrid);
   }
@@ -1338,13 +1345,15 @@ function renderDatasetUpload() {
   clear(canvas);
   removeCompareBar();
 
-  canvas.appendChild(
+  const view = el("div", { class: "form-view" });
+  canvas.appendChild(view);
+  view.appendChild(
     el("button", { class: "back-link", onClick: () => navigate("/datasets") }, "← 返回数据列表")
   );
-  canvas.appendChild(el("h1", { class: "view-title" }, "上传数据"));
+  view.appendChild(el("h1", { class: "view-title" }, "上传数据"));
 
   const page = el("div", { class: "form-page" });
-  canvas.appendChild(page);
+  view.appendChild(page);
 
   // step 1: 先选数据类型（独立先决步骤，带人话解释）
   const formatOptions = [
@@ -1505,6 +1514,92 @@ async function previewDataset(id) {
 /* ===================================================================== *
  * VIEW: lab
  * ===================================================================== */
+
+// 回答风格档位 → 底层解码参数（与后端 STYLE_PRESETS 保持一致）。
+// 用户只选档位，专业参数默认折叠在“高级”里。
+const LAB_STYLES = [
+  { id: "steady", title: "稳重", note: "回答更稳定保守，适合客服、问答", params: { temperature: 0.5, top_p: 0.9, repetition_penalty: 1.15, no_repeat_ngram_size: 3 } },
+  { id: "balanced", title: "平衡", note: "稳定与灵活兼顾，适合日常对话", params: { temperature: 0.7, top_p: 0.9, repetition_penalty: 1.15, no_repeat_ngram_size: 3 } },
+  { id: "lively", title: "活泼", note: "更有创意发挥，适合角色扮演、创作", params: { temperature: 1.0, top_p: 0.95, repetition_penalty: 1.2, no_repeat_ngram_size: 3 } },
+];
+
+const LAB_PARAM_SPECS = [
+  ["temperature", "随机性 temperature", 0, 2, 0.1, "越高回答越天马行空，越低越保守。太高会胡说，为 0 易复读。"],
+  ["top_p", "候选范围 top_p", 0, 1, 0.05, "越小越保守，只在最靠谱的词里挑。"],
+  ["repetition_penalty", "防复读力度", 1, 1.5, 0.05, "对已说过的词降权，越大越不容易重复。太大会凑怪词。"],
+  ["no_repeat_ngram_size", "禁止重复词组长度", 2, 4, 1, "禁止连续几个词的组合重复出现。"],
+];
+
+// 构建“回答风格”选择器：三档预设 + 可展开的高级参数，复用训练表单同款交互。
+function buildStyleControl() {
+  const wrap = el("div", { class: "lab-style" });
+  wrap.appendChild(el("div", { class: "field-label" }, "回答风格"));
+
+  const presetChoices = el("div", { class: "choices" });
+  const advanced = el("details", { class: "advanced" });
+  const paramGrid = el("div", { class: "param-grid" });
+
+  function currentStyleParams() {
+    const preset = LAB_STYLES.find((s) => s.id === state.labStyle) || LAB_STYLES[1];
+    return { ...preset.params, ...state.labAdvanced };
+  }
+
+  function paintPresets() {
+    clear(presetChoices);
+    for (const s of LAB_STYLES) {
+      presetChoices.appendChild(
+        el(
+          "button",
+          {
+            class: `choice ${state.labStyle === s.id && !Object.keys(state.labAdvanced).length ? "active" : ""}`,
+            onClick: () => {
+              state.labStyle = s.id;
+              state.labAdvanced = {};
+              paintPresets();
+              paintAdvanced();
+            },
+          },
+          [
+            el("span", { class: "choice-title" }, s.title),
+            el("span", { class: "choice-note" }, s.note),
+          ]
+        )
+      );
+    }
+  }
+
+  function paintAdvanced() {
+    clear(advanced);
+    advanced.appendChild(el("summary", {}, "展开调整高级参数"));
+    clear(paramGrid);
+    const values = currentStyleParams();
+    for (const [key, label, min, max, step, hint] of LAB_PARAM_SPECS) {
+      const input = el("input", {
+        class: "input tnum",
+        type: "number",
+        min,
+        max,
+        step,
+        value: values[key],
+        onInput: (e) => {
+          state.labAdvanced[key] = Number(e.target.value);
+          paintPresets();
+        },
+      });
+      paramGrid.appendChild(
+        el("div", {}, [el("label", {}, label), input, el("p", { class: "param-hint" }, hint)])
+      );
+    }
+    advanced.appendChild(paramGrid);
+  }
+
+  paintPresets();
+  paintAdvanced();
+  wrap.appendChild(presetChoices);
+  wrap.appendChild(advanced);
+  return wrap;
+}
+
 async function renderLab() {
   clear(canvas);
   removeCompareBar();
@@ -1613,6 +1708,7 @@ async function renderLab() {
   });
 
   panelCompare.appendChild(promptHints);
+  panelCompare.appendChild(buildStyleControl());
   panelCompare.appendChild(compareFlow);
   panelCompare.appendChild(inputRow);
 
@@ -1655,7 +1751,7 @@ async function renderLab() {
       const res = await api("/api/lab/compare-chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, style: state.labStyle, ...state.labAdvanced }),
       });
       item.base_answer = res.base_answer;
       item.finetuned_answer = res.finetuned_answer;

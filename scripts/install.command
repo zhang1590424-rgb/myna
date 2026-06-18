@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Agent-friendly installer for 小白训练师.
+# Agent-friendly installer for Myna.
 
 set -euo pipefail
 

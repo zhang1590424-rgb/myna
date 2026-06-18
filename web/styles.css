@@ -573,7 +573,11 @@ a { color: inherit; }
 }
 
 /* ═══════════════════ Form page ═══════════════════ */
-.form-page { max-width: 640px; }
+.form-view {
+  max-width: 800px;
+  margin: 0 auto;
+}
+.form-page { max-width: 100%; }
 
 .field {
   display: grid;
@@ -699,6 +703,13 @@ textarea.input {
   color: var(--running);
   font-size: 11.5px;
   margin-left: 6px;
+}
+
+.param-hint {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin: 6px 0 0;
 }
 
 .form-actions {
@@ -915,6 +926,13 @@ textarea.input {
 .lab-tab:hover { color: var(--text); }
 
 .lab-panel { min-height: 300px; }
+
+.lab-style {
+  margin-bottom: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.lab-style .choices { margin-top: 4px; }
 
 .prompt-hints {
   display: flex;

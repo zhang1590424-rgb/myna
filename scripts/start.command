@@ -19,7 +19,7 @@ if [ ! -x "$PYTHON" ]; then
 fi
 
 printf '================================================\n'
-printf '  小白训练师 · 本机 Web 控制台\n'
+printf '  Myna · 本机 Web 控制台\n'
 printf '================================================\n\n'
 
 if lsof -i TCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
@@ -30,7 +30,7 @@ if lsof -i TCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
     read -r _ || true
     exit 0
   fi
-  printf '[start][error] 端口 %s 已被占用，但不是小白训练师服务。请换端口或关闭占用进程。\n' "$PORT" >&2
+  printf '[start][error] 端口 %s 已被占用，但不是 Myna 服务。请换端口或关闭占用进程。\n' "$PORT" >&2
   exit 1
 fi
 

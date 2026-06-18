@@ -107,6 +107,7 @@ git diff --cached --stat
 - 进度读 `trainer_log.jsonl`，不解析 stdout。
 - `llamafactory-cli` 用 `sys.executable` 旁路解析绝对路径，不依赖 PATH。
 - `dataset_info.json` 的 `system` 列只在数据真含 system 时声明，否则 LLaMA-Factory 报 `KeyError: 'system'`。
+- **多模态模型（如 Qwen3.5 的 `*ForConditionalGeneration`）推理必须用 `AutoModelForImageTextToText` 加载，不能用 `AutoModelForCausalLM`**。这类模型文本主干包在 `language_model` 子模块里，训练存出的 adapter key 带 `language_model` 前缀；用纯文本入口加载会让结构不一致，LoRA 权重全部 key 对不上、被 peft 静默丢弃，表现为「训练正常但测评对比前后无差异」。已在 `infer.py` 加 missing-keys 校验，加载不全直接报错而非静默。
 
 ## 项目状态
 
