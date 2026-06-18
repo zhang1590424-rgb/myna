@@ -2,7 +2,7 @@
 
 ## 项目定位
 
-本地小白模型微调工具：面向不懂模型训练的 Mac 用户，用引导式 Web 界面完成本地 LoRA SFT 训练，训练前后对比看效果。
+本地模型微调工具：面向不懂模型训练的 Mac 用户，用引导式 Web 界面完成本地 LoRA SFT 训练，训练前后对比看效果。
 
 当前形态：**本机 Web 控制台**（`127.0.0.1:4180`），Python FastAPI 后端 + 静态前端，真实训练由 LLaMA-Factory 驱动。
 
@@ -38,8 +38,7 @@
 │   ├── doctor.command
 │   ├── start.command
 │   └── verify.command
-├── samples/             # 示例数据集
-│   └── customer-service.csv
+├── samples/             # 预留示例目录（示例数据现内置在 local_trainer/templates.py，按需实时生成 CSV）
 ├── tests/               # 自动化测试
 ├── runtime/             # 运行产物（自动生成，不提交）
 │   ├── datasets/        # 上传的数据集
@@ -51,7 +50,7 @@
 ├── DESIGN.md            # 视觉规范
 ├── INSTALL.md           # Agent 安装指南
 ├── requirements.txt     # Python 依赖
-└── 启动小白训练师.command  # 双击启动入口
+└── 启动Myna.command  # 双击启动入口
 ```
 
 ## 实现原则
