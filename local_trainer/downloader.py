@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shutil
 import sys
@@ -8,15 +9,19 @@ import sys
 from .domain import ModelDownloadStatus
 from .paths import MODELS_DIR, model_dir_for_repo
 
+# 让单个大文件用多连接分片下载（modelscope 默认 1，即串行，是慢的主因）。
+DOWNLOAD_PARALLELS = "4"
+# modelscope 下载中的临时目录名，用于统计在途字节。
+TEMP_FOLDER_NAME = "._____temp"
+
 
 class ModelDownloader:
     """Downloads models from ModelScope via a background subprocess.
 
-    Spawns a separate Python process to run snapshot_download, captures stderr
-    (where modelscope/tqdm writes progress), and updates progress in real time.
-    This approach is more reliable than in-process threading: the download won't
-    block the event loop, a crash won't take down the server, and the user sees
-    actual percentage updates.
+    Spawns a separate Python process to run snapshot_download, and computes
+    overall progress from bytes-on-disk / total-remote-bytes. This is more
+    reliable than parsing tqdm: a model has many files, and tqdm reports each
+    file 0→100% separately, which makes a single shared bar jump backwards.
     """
 
     def __init__(self) -> None:
@@ -67,28 +72,36 @@ class ModelDownloader:
             self._tasks.pop(model_id, None)
 
     async def _download_subprocess(self, model_id: str, repo_id: str) -> None:
-        """Spawn a subprocess to download, parse tqdm progress from stderr."""
+        """Spawn a subprocess to download; progress tracked by bytes on disk."""
         script = (
             "import sys; "
             "from modelscope import snapshot_download; "
-            f"snapshot_download('{repo_id}', cache_dir='{MODELS_DIR}'); "
+            f"snapshot_download('{repo_id}', cache_dir=r'{MODELS_DIR}', max_workers=8); "
             "print('__DONE__')"
         )
+
+        env = dict(os.environ)
+        env["MODELSCOPE_DOWNLOAD_PARALLELS"] = DOWNLOAD_PARALLELS
 
         proc = await asyncio.create_subprocess_exec(
             sys.executable, "-u", "-c", script,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
 
-        # Read stderr in background to parse progress
-        asyncio.create_task(self._watch_progress(model_id, repo_id, proc))
+        # 后台跟踪进度：优先按字节算整体进度，拿不到总大小时降级解析 tqdm。
+        total_bytes = await asyncio.to_thread(self._remote_total_bytes, repo_id)
+        stderr_tail = bytearray()
+        progress_task = asyncio.create_task(
+            self._watch_progress(model_id, repo_id, proc, total_bytes, stderr_tail)
+        )
 
         await proc.wait()
+        await progress_task  # 等它读完剩余 stderr 再判定结果
 
         if proc.returncode != 0:
-            stderr_bytes = await proc.stderr.read() if proc.stderr else b""
-            error_text = stderr_bytes.decode(errors="replace")[-500:]
+            error_text = bytes(stderr_tail).decode(errors="replace")[-500:]
 
             if "ModuleNotFoundError" in error_text or "No module named" in error_text:
                 self._status[model_id] = ModelDownloadStatus(
@@ -126,13 +139,76 @@ class ModelDownloader:
                 error="weight files missing after download",
             )
 
+    def _remote_total_bytes(self, repo_id: str) -> int:
+        """查询仓库所有文件的总字节数，作为整体进度的分母。失败返回 0。"""
+        try:
+            from modelscope.hub.api import HubApi
+
+            files = HubApi().get_model_files(repo_id, recursive=True)
+            total = 0
+            for f in files:
+                if f.get("Type") == "tree":
+                    continue
+                total += int(f.get("Size") or f.get("size") or 0)
+            return total
+        except Exception:
+            return 0
+
+    def _downloaded_bytes(self, repo_id: str) -> int:
+        """统计已落盘字节，含已完成文件和临时目录中的在途分片。"""
+        total = 0
+        target = model_dir_for_repo(repo_id)
+        roots = [target, target / TEMP_FOLDER_NAME, MODELS_DIR / TEMP_FOLDER_NAME]
+        seen: set[str] = set()
+        for root in roots:
+            if not root.exists():
+                continue
+            for path in root.rglob("*"):
+                if not path.is_file():
+                    continue
+                key = str(path.resolve())
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    total += path.stat().st_size
+                except OSError:
+                    continue
+        return total
+
     async def _watch_progress(
-        self, model_id: str, repo_id: str, proc: asyncio.subprocess.Process
+        self,
+        model_id: str,
+        repo_id: str,
+        proc: asyncio.subprocess.Process,
+        total_bytes: int,
+        stderr_tail: bytearray,
     ) -> None:
-        """Parse tqdm percentage from stderr and update status."""
-        # tqdm outputs lines like: " 45%|████      | 900M/2.00G [00:12<00:15, 73.2MB/s]"
-        pct_pattern = re.compile(r"(\d{1,3})%\|")
+        """整体进度优先按字节算；拿不到总大小时降级解析 tqdm 百分比。"""
         stderr = proc.stderr
+
+        if total_bytes > 0:
+            # 字节进度：单调递增，不会因为切换文件而回跳。
+            # 同时起一个协程持续排空 stderr，防止 pipe 写满阻塞子进程。
+            drain = asyncio.create_task(self._drain_stderr(stderr, stderr_tail))
+            last_pct = 1
+            while proc.returncode is None:
+                done = await asyncio.to_thread(self._downloaded_bytes, repo_id)
+                pct = int(done * 100 / total_bytes)
+                pct = max(last_pct, min(pct, 99))
+                last_pct = pct
+                self._status[model_id] = ModelDownloadStatus(
+                    model_id=model_id,
+                    state="downloading",
+                    progress=pct,
+                    message=f"正在下载 {repo_id}（{pct}%）",
+                )
+                await asyncio.sleep(1.5)
+            await drain
+            return
+
+        # 降级：解析 tqdm 的单文件百分比（无法反映整体，仅聊胜于无）。
+        pct_pattern = re.compile(r"(\d{1,3})%\|")
         if stderr is None:
             return
 
@@ -141,19 +217,31 @@ class ModelDownloader:
             chunk = await stderr.read(512)
             if not chunk:
                 break
+            stderr_tail.extend(chunk)
+            del stderr_tail[:-2000]
             buffer += chunk.decode(errors="replace")
-            # tqdm uses \r for in-place updates, split on that
             lines = buffer.split("\r")
-            buffer = lines[-1]  # keep incomplete tail
+            buffer = lines[-1]
             for line in lines[:-1]:
                 match = pct_pattern.search(line)
                 if match:
-                    pct = int(match.group(1))
-                    # Clamp to 1-99 during download (100 means verified complete)
-                    pct = max(1, min(pct, 99))
+                    pct = max(1, min(int(match.group(1)), 99))
                     self._status[model_id] = ModelDownloadStatus(
                         model_id=model_id,
                         state="downloading",
                         progress=pct,
                         message=f"正在下载 {repo_id}（{pct}%）",
                     )
+
+    async def _drain_stderr(
+        self, stderr: asyncio.StreamReader | None, stderr_tail: bytearray
+    ) -> None:
+        """持续读 stderr 防止 pipe 阻塞，只保留尾部用于报错。"""
+        if stderr is None:
+            return
+        while True:
+            chunk = await stderr.read(512)
+            if not chunk:
+                break
+            stderr_tail.extend(chunk)
+            del stderr_tail[:-2000]

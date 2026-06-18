@@ -1152,11 +1152,33 @@ function renderModels() {
     list.appendChild(modelRow(m));
   }
   canvas.appendChild(list);
+
+  // 切回模型页时，恢复仍在后台下载的模型的进度条与轮询。
+  for (const m of state.models) {
+    if (!m.available && m.repo_id) {
+      restoreDownload(m);
+    }
+  }
+}
+
+async function restoreDownload(model) {
+  let s;
+  try {
+    s = await api(`/api/models/${model.id}/download`);
+  } catch {
+    return;
+  }
+  if (s.state !== "downloading") return;
+  const row = canvas.querySelector(`[data-model-id="${model.id}"]`);
+  if (!row) return;
+  const actions = row.querySelector(".row-actions");
+  clear(actions);
+  attachProgress(model, actions, s.progress || 0);
 }
 
 function modelRow(m) {
   const actions = el("div", { class: "row-actions" });
-  const row = el("div", { class: "list-row" }, [
+  const row = el("div", { class: "list-row", "data-model-id": m.id }, [
     el("div", {}, [
       el("div", { class: "row-name" }, [
         m.name,
@@ -1196,8 +1218,15 @@ async function startDownload(model, row, btn) {
   }
   const actions = row.querySelector(".row-actions");
   clear(actions);
-  const prog = el("div", { class: "dl-progress" }, [el("span", { style: "width:0%" })]);
-  const pct = el("span", { class: "muted tnum" }, "0%");
+  attachProgress(model, actions, 0);
+}
+
+// 渲染进度条并启动轮询；startDownload 和 restoreDownload 共用。
+function attachProgress(model, actions, initial) {
+  const prog = el("div", { class: "dl-progress" }, [
+    el("span", { style: `width:${initial}%` }),
+  ]);
+  const pct = el("span", { class: "muted tnum" }, `${initial}%`);
   actions.appendChild(prog);
   actions.appendChild(pct);
 
