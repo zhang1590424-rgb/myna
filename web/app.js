@@ -74,8 +74,8 @@ async function init() {
   applyPreset(state.selectedPresetId);
   resetComparePrompt();
   renderTemplates();
-  renderModels();
   renderEnvironment(environment);
+  renderModels();
   renderPresets();
   bindEvents();
   render();
@@ -252,6 +252,7 @@ function renderEnvironment(environment) {
       detail: modelReady ? "已有可用模型，可以继续上传数据。" : "请选择一个模型下载，第一次建议 0.5B。",
       action: "",
       command: "",
+      extra: '<div class="model-options" id="modelGrid"></div>',
     }),
   ].join("");
   document.querySelectorAll("[data-copy-command]").forEach((button) => {
@@ -259,26 +260,29 @@ function renderEnvironment(environment) {
   });
   setStatus(
     "#environmentStatus",
-    modelReady ? "环境检查完成。模型和数据都只保存在本机。" : "还没有可用模型，请先在右侧下载一个。",
+    modelReady ? "环境检查完成。模型和数据都只保存在本机。" : "还没有可用模型，请先在本地基础模型里下载一个。",
     !modelReady,
   );
 }
 
-function dependencyItem({ title, ok, optional = false, detail, action, command }) {
+function dependencyItem({ title, ok, optional = false, detail, action, command, extra = "" }) {
   const stateClass = ok ? "ok" : optional ? "warn" : "missing";
   const stateText = ok ? "已就绪" : optional ? "可选优化" : "未就绪";
   const button = action
     ? `<button class="text-button" type="button" data-copy-command="${command}">${action}</button>`
     : "";
   return `
-    <div class="dependency-item ${stateClass}">
-      <span class="dependency-dot" aria-hidden="true">${ok ? "✓" : optional ? "!" : "×"}</span>
-      <div>
-        <strong>${title}</strong>
-        <p>${detail}</p>
+    <div class="dependency-item ${stateClass}${extra ? " has-extra" : ""}">
+      <div class="dependency-main">
+        <span class="dependency-dot" aria-hidden="true">${ok ? "✓" : optional ? "!" : "×"}</span>
+        <div>
+          <strong>${title}</strong>
+          <p>${detail}</p>
+        </div>
+        <em>${stateText}</em>
+        ${button}
       </div>
-      <em>${stateText}</em>
-      ${button}
+      ${extra}
     </div>
   `;
 }
@@ -303,8 +307,8 @@ async function refreshEnvironment() {
     state.selectedModelId =
       models.find((item) => item.recommended && item.available)?.id || models.find((item) => item.available)?.id || models[0]?.id;
   }
-  renderModels();
   renderEnvironment(environment);
+  renderModels();
   renderSummary();
   renderActions();
 }
@@ -341,6 +345,9 @@ function renderTemplates() {
 
 function renderModels() {
   const grid = document.querySelector("#modelGrid");
+  if (!grid) {
+    return;
+  }
   grid.innerHTML = state.models
     .map((model) => {
       const selected = model.id === state.selectedModelId ? " selected" : "";
@@ -349,11 +356,12 @@ function renderModels() {
         ? `<span class="model-tag">${selected ? "当前使用" : "已就绪"}</span>`
         : `<button class="model-download-btn" type="button" data-download-id="${model.id}">下载 (${model.download_size_label || ""})</button>`;
       return `
-        <div class="model-card${selected}${disabled}" data-model-id="${model.id}">
-          <h2>${model.name}</h2>
-          <p>${model.size_label} · ${model.parameter_count}</p>
-          <p>${model.note}</p>
-          <p class="model-download-status" id="downloadStatus-${model.id}"></p>
+        <div class="model-option${selected}${disabled}" data-model-id="${model.id}">
+          <div>
+            <strong>${model.name}</strong>
+            <span>${model.size_label} · ${model.parameter_count} · ${model.note}</span>
+            <p class="model-download-status" id="downloadStatus-${model.id}"></p>
+          </div>
           ${action}
         </div>
       `;
@@ -412,8 +420,8 @@ function pollModelDownload(modelId) {
         const [environment, models] = await Promise.all([api("/api/environment"), api("/api/models")]);
         state.models = models;
         state.selectedModelId = modelId;
-        renderModels();
         renderEnvironment(environment);
+        renderModels();
         renderSummary();
         renderActions();
       }

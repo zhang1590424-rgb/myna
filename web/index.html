@@ -40,31 +40,20 @@
               <p class="eyebrow">第 0 步 / 共 4 步</p>
               <h1>先把训练环境准备好</h1>
               <p class="lede" id="environmentMessage">正在连接本地服务。</p>
-              <div class="environment-layout">
-                <section class="environment-block">
-                  <div class="section-head">
-                    <div>
-                      <h2>依赖检测</h2>
-                      <p>缺组件时先按提示修复，模型可以在右侧直接下载。</p>
-                    </div>
-                    <button class="btn btn-quiet btn-small" type="button" id="refreshEnvironmentButton">重新检测</button>
+              <section class="environment-block">
+                <div class="section-head">
+                  <div>
+                    <h2>依赖检测</h2>
+                    <p>缺组件时先按提示修复，模型型号在本地基础模型里选择。</p>
                   </div>
+                  <button class="btn btn-quiet btn-small" type="button" id="refreshEnvironmentButton">重新检测</button>
+                </div>
                 <div class="progress-track" aria-label="环境准备进度">
                   <i id="environmentProgress"></i>
                 </div>
-                  <div class="dependency-list" id="environmentChecklist"></div>
-                  <p class="inline-status" id="environmentStatus"></p>
-                </section>
-                <section class="environment-block">
-                  <div class="section-head">
-                    <div>
-                      <h2>本地模型</h2>
-                      <p>第一次建议用 0.5B，速度和成功率优先。</p>
-                    </div>
-                  </div>
-                  <div class="model-grid" id="modelGrid"></div>
-                </section>
-              </div>
+                <div class="dependency-list" id="environmentChecklist"></div>
+                <p class="inline-status" id="environmentStatus"></p>
+              </section>
             </section>
 
             <section class="panel" data-panel="1">
