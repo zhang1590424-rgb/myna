@@ -29,27 +29,21 @@ cd myna
 # 2. 安装环境（创建虚拟环境 + 安装依赖 + 下载 LLaMA-Factory 训练引擎）
 bash scripts/install.command
 
-# 3. 健康检查（验证 Python/MPS/依赖/磁盘）
+# 3. 预下载入门模型 Qwen3.5-0.8B（约 2GB），让用户打开界面就能直接用
+#    必须用与界面相同的下载器和 models/ 目录，不要换成 huggingface-cli 等其他工具，否则界面识别不到
+MODELSCOPE_DOWNLOAD_PARALLELS=4 .venv/bin/python -c "from modelscope import snapshot_download; snapshot_download('Qwen/Qwen3.5-0.8B', cache_dir='models', max_workers=8)"
+
+# 4. 健康检查（验证 Python/MPS/依赖/磁盘）
 bash scripts/doctor.command
 
-# 4. 运行测试（确认代码完整可用）
+# 5. 运行测试（确认代码完整可用）
 bash scripts/verify.command
 
-# 5. 启动服务
+# 6. 启动服务
 bash scripts/start.command
 ```
 
-### 可选：首次安装时预下载入门模型
-
-启动成功后，建议顺手把推荐的入门模型 **Qwen3.5-0.8B**（约 2GB）下载到本地，这样用户打开界面就能直接开始用，不必进去才发现还要等下载。
-
-在项目根目录执行（**必须用与界面相同的下载器和 `models/` 目录**，不要换成 huggingface-cli 等其他工具，否则界面识别不到已下载的模型）：
-
-```bash
-MODELSCOPE_DOWNLOAD_PARALLELS=4 .venv/bin/python -c "from modelscope import snapshot_download; snapshot_download('Qwen/Qwen3.5-0.8B', cache_dir='models', max_workers=8)"
-```
-
-这一步**可选**：下载失败不影响部署是否成功，告知用户即可，用户之后可在界面「模型」页面手动下载。
+> 第 3 步若下载失败，不影响部署是否成功，可告知用户跳过，之后在界面「模型」页面手动下载。
 
 ### 成功标志
 

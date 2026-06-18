@@ -18,7 +18,7 @@ from .domain import (
     UpdateExperimentRequest,
 )
 from .downloader import ModelDownloader
-from .engine import build_engine
+from .engine import build_engine, real_engine_ready
 from .environment import collect_environment_status
 from .experiment_service import ExperimentService
 from .inference_engine import InferenceEngine, resolve_gen_params
@@ -71,8 +71,10 @@ def health() -> dict[str, str]:
 def environment():
     status = collect_environment_status()
     payload = status.model_dump()
-    payload["engine"] = training_engine.name
-    payload["engine_label"] = "真实训练" if training_engine.name == "llamafactory" else "演示模式"
+    ready = real_engine_ready()
+    payload["engine"] = "llamafactory" if ready else "not_ready"
+    payload["engine_label"] = "真实训练" if ready else "环境未就绪，暂不能训练"
+    payload["can_train"] = ready
     return payload
 
 
@@ -376,6 +378,12 @@ async def lab_batch_test(request: LabBatchTestRequest):
 # Helpers
 # --------------------------------------------------------------------------- #
 def _validate_experiment_inputs(model_id: str, dataset_id: str, method: str) -> None:
+    if not real_engine_ready():
+        raise HTTPException(
+            status_code=409,
+            detail="还不能开始训练。请先在模型页下载一个本地模型，并确认训练组件已就绪。",
+        )
+
     try:
         model = get_model(model_id)
     except KeyError as exc:

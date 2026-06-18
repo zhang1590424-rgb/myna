@@ -731,7 +731,7 @@ textarea.input {
   margin-bottom: 24px;
 }
 
-.demo-banner {
+.blocked-banner {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -745,7 +745,7 @@ textarea.input {
   color: #7A4E00;
 }
 
-.demo-banner strong {
+.blocked-banner strong {
   font-size: 13px;
   color: #8A4B00;
 }

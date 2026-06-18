@@ -6,7 +6,7 @@ from pathlib import Path
 
 from local_trainer.dataset_manager import DatasetManager
 from local_trainer.engine import (
-    EngineRouter,
+    LlamaFactoryTrainingEngine,
     build_engine,
     parse_trainer_log,
 )
@@ -56,37 +56,19 @@ class PrecisionPolicyTests(unittest.TestCase):
         self.assertFalse(precision["fp16"])
 
 
-class EngineRouterTests(unittest.TestCase):
+class EngineFactoryTests(unittest.TestCase):
     def _build_services(self, temp_dir: str) -> tuple[ExperimentService, DatasetManager]:
         db = Database(db_path=Path(temp_dir) / "workbench.db")
         datasets = DatasetManager(db, root=Path(temp_dir) / "datasets")
         experiments = ExperimentService(db, datasets)
         return experiments, datasets
 
-    def test_build_engine_returns_router(self) -> None:
+    def test_build_engine_returns_real_engine(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             experiments, datasets = self._build_services(temp_dir)
             engine = build_engine(experiments, datasets)
-        self.assertIsInstance(engine, EngineRouter)
-
-    def test_name_reflects_environment_at_call_time(self) -> None:
-        import local_trainer.engine as engine_module
-
-        original = engine_module.real_engine_ready
-        try:
-            with tempfile.TemporaryDirectory() as temp_dir:
-                experiments, datasets = self._build_services(temp_dir)
-                router = build_engine(experiments, datasets)
-
-                # Not ready at first → reports mock.
-                engine_module.real_engine_ready = lambda: False
-                self.assertEqual(router.name, "mock")
-
-                # Model downloaded later, same process → reports real, no restart.
-                engine_module.real_engine_ready = lambda: True
-                self.assertEqual(router.name, "llamafactory")
-        finally:
-            engine_module.real_engine_ready = original
+        self.assertIsInstance(engine, LlamaFactoryTrainingEngine)
+        self.assertEqual(engine.name, "llamafactory")
 
 
 if __name__ == "__main__":

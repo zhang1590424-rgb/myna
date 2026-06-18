@@ -57,8 +57,9 @@ class EnvironmentStatus(BaseModel):
     model_status: list[ModelStatus]
     progress: int
     message: str
-    engine: str = "mock"
-    engine_label: str = "演示模式"
+    engine: str = "not_ready"
+    engine_label: str = "环境未就绪，暂不能训练"
+    can_train: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -158,7 +159,7 @@ class Experiment(BaseModel):
     run_dir: str | None = None
     pid: int | None = None
     error: str | None = None
-    engine: str = "mock"
+    engine: str = "llamafactory"
     cloned_from: str | None = None
     notes: str = ""
     tags: list[str] = Field(default_factory=list)

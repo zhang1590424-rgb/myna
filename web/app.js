@@ -518,14 +518,16 @@ function renderNewExperiment(cloneFromId) {
   const page = el("div", { class: "form-page" });
   view.appendChild(page);
 
-  if (state.environment && state.environment.engine === "mock") {
+  const canTrain = !state.environment || state.environment.can_train !== false;
+
+  if (!canTrain) {
     page.appendChild(
-      el("div", { class: "demo-banner" }, [
-        el("strong", {}, "当前是演示模式，训练结果不是真实的。"),
+      el("div", { class: "blocked-banner" }, [
+        el("strong", {}, "还不能开始训练。"),
         el(
           "span",
           {},
-          "还缺训练组件或本地模型。请先到模型页下载模型，下载完成后无需重启，回到这里再发起训练就会自动启用真实训练。"
+          "缺少训练组件或本地模型。请先到模型页下载一个模型，环境就绪后即可发起真实训练（无需重启）。"
         ),
       ])
     );
@@ -752,7 +754,12 @@ function renderNewExperiment(cloneFromId) {
 
   // ---- actions ----
   const startBtn = el("button", { class: "btn primary" }, "开始训练 →");
+  if (!canTrain) {
+    startBtn.disabled = true;
+    startBtn.title = "环境未就绪，请先到模型页下载模型。";
+  }
   startBtn.addEventListener("click", async () => {
+    if (!canTrain) return toast("环境未就绪，请先到模型页下载模型。", true);
     if (!form.model_id) return toast("请先选一个可用的底座模型。", true);
     if (!form.dataset_id) return toast("请先选一份匹配的训练数据。", true);
     startBtn.disabled = true;
@@ -874,19 +881,6 @@ async function renderDetail(id) {
       el("div", { class: "row-actions" }, actions),
     ])
   );
-
-  if (exp.engine === "mock") {
-    canvas.appendChild(
-      el("div", { class: "demo-banner" }, [
-        el("strong", {}, "这是演示模式的结果，不是真实训练。"),
-        el(
-          "span",
-          {},
-          "loss 曲线和产物都是模拟生成的，不能用于评估模型效果。请确认已下载本地模型，再重新发起一次训练即可得到真实结果（无需重启服务）。"
-        ),
-      ])
-    );
-  }
 
   if (exp.status === "running") {
     const pct = Math.round(exp.progress || 0);

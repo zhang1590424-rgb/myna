@@ -1,9 +1,10 @@
 """Training engine: runs a real LLaMA-Factory subprocess per Experiment.
 
 Drives the subprocess, streams progress into ExperimentService, and supports
-stop / export. SFT reads alpaca records, DPO reads preference records. When the
-environment is not ready, build_engine returns the MockTrainingEngine so the
-product flow still works end to end.
+stop / export. SFT reads alpaca records, DPO reads preference records. Training
+can only be started once the environment is ready (LLaMA-Factory installed and
+at least one local model); the API layer blocks creation otherwise, so there is
+no demo / mock fallback.
 """
 from __future__ import annotations
 
@@ -43,6 +44,8 @@ class TrainingEngine(Protocol):
     name: str
 
     async def start(self, experiment: Experiment) -> None: ...
+
+    async def wait(self, exp_id: str) -> None: ...
 
     async def stop(self, exp_id: str) -> Experiment: ...
 
@@ -319,125 +322,6 @@ def _humanize_failure(stderr: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Mock engine (demo / fallback)
-# --------------------------------------------------------------------------- #
-class MockTrainingEngine:
-    name = "mock"
-
-    def __init__(self, experiments: ExperimentService, runs_dir: Path = RUNS_DIR) -> None:
-        self.experiments = experiments
-        self.runs_dir = runs_dir
-        self._stop_events: dict[str, asyncio.Event] = {}
-        self._tasks: dict[str, asyncio.Task[None]] = {}
-        ensure_runtime_dirs()
-
-    async def start(self, experiment: Experiment) -> None:
-        stop_event = asyncio.Event()
-        self._stop_events[experiment.id] = stop_event
-        self._tasks[experiment.id] = asyncio.create_task(self._run(experiment.id, stop_event))
-
-    async def wait(self, exp_id: str) -> None:
-        task = self._tasks.get(exp_id)
-        if task is not None:
-            await task
-
-    async def stop(self, exp_id: str) -> Experiment:
-        event = self._stop_events.get(exp_id)
-        if event is not None:
-            event.set()
-        return self.experiments.apply_changes(
-            exp_id, status=ExperimentStatus.stopping.value, message="正在安全停止训练"
-        )
-
-    async def export(self, exp_id: str, merge: bool = False) -> ExportResult:
-        exp = self.experiments.get(exp_id)
-        if exp.status != "completed":
-            raise RuntimeError("训练完成后才能导出模型。")
-        ensure_runtime_dirs()
-        export_dir = self.runs_dir / exp_id
-        export_dir.mkdir(parents=True, exist_ok=True)
-        payload_path = export_dir / f"model-export-{exp_id}.json"
-        payload_path.write_text(
-            json.dumps(
-                {
-                    "experiment_id": exp.id,
-                    "model_id": exp.model_id,
-                    "method": exp.method,
-                    "dataset_id": exp.dataset_id,
-                    "engine": "mock",
-                    "merge_requested": merge,
-                    "note": "当前是模拟训练产物。切换到真实引擎后会导出真正的 LoRA 适配器或合并模型。",
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        return ExportResult(
-            path=payload_path, filename=payload_path.name, media_type="application/json; charset=utf-8"
-        )
-
-    async def _run(self, exp_id: str, stop_event: asyncio.Event) -> None:
-        exp = self.experiments.apply_changes(
-            exp_id,
-            status=ExperimentStatus.running.value,
-            started_at=utc_now(),
-            progress=2,
-            engine="mock",
-            message="正在整理数据",
-        )
-        total_steps = max(12, exp.params.epochs * 8)
-        losses: list[float] = []
-
-        try:
-            for step in range(1, total_steps + 1):
-                if stop_event.is_set():
-                    self.experiments.apply_changes(
-                        exp_id,
-                        status=ExperimentStatus.stopped.value,
-                        finished_at=utc_now(),
-                        message="训练已停止，已有数据没有丢失。",
-                    )
-                    return
-
-                progress = min(99, math.floor(step / total_steps * 100))
-                epoch = min(exp.params.epochs, math.ceil(step / max(1, total_steps / exp.params.epochs)))
-                loss = round(max(0.18, 2.2 - (step / total_steps) * 1.55), 3)
-                losses.append(loss)
-                self.experiments.apply_changes(
-                    exp_id,
-                    progress=progress,
-                    loss=list(losses),
-                    message=f"正在学习第 {epoch} 轮，共 {exp.params.epochs} 轮",
-                )
-                await asyncio.sleep(0.2)
-
-            output_dir = self.runs_dir / exp_id
-            output_dir.mkdir(parents=True, exist_ok=True)
-            (output_dir / "adapter-metadata.json").write_text(
-                json.dumps({"experiment_id": exp_id, "engine": "mock", "created_at": utc_now()}, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            self.experiments.apply_changes(
-                exp_id,
-                status=ExperimentStatus.completed.value,
-                progress=100,
-                output_dir=str(output_dir),
-                finished_at=utc_now(),
-                metrics={"final_loss": losses[-1], "peak_loss": max(losses)},
-                message="训练完成（演示模式）。切换真实引擎后即为真实结果。",
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            self.experiments.apply_changes(
-                exp_id,
-                status=ExperimentStatus.failed.value,
-                finished_at=utc_now(),
-                error=str(exc),
-                message="训练失败。请检查数据格式后再试一次。",
-            )
-
-
-# --------------------------------------------------------------------------- #
 # Engine factory
 # --------------------------------------------------------------------------- #
 def real_engine_ready() -> bool:
@@ -448,54 +332,5 @@ def real_engine_ready() -> bool:
     return status.llamafactory_ok and has_model
 
 
-class EngineRouter:
-    """Pick the engine per training run, not once at service startup.
-
-    Users usually download models *after* launching the service, so deciding
-    the engine at import time locked us into the mock engine forever — real
-    training never kicked in without a restart. Routing at start() time lets a
-    real run begin the moment the environment is ready, no restart needed.
-
-    Each experiment remembers which engine it actually ran on (in-process map
-    plus the persisted experiment.engine field), so stop / export always reach
-    the same engine even across restarts.
-    """
-
-    def __init__(self, experiments: ExperimentService, datasets: DatasetManager) -> None:
-        self.experiments = experiments
-        self._real = LlamaFactoryTrainingEngine(experiments, datasets)
-        self._mock = MockTrainingEngine(experiments)
-        self._routes: dict[str, TrainingEngine] = {}
-
-    @property
-    def name(self) -> str:
-        """Engine the next run would use, based on the current environment."""
-        return self._real.name if real_engine_ready() else self._mock.name
-
-    def _engine_for(self, exp_id: str) -> TrainingEngine:
-        route = self._routes.get(exp_id)
-        if route is not None:
-            return route
-        # Fall back to the engine recorded on the experiment (survives restarts).
-        exp = self.experiments.get(exp_id)
-        return self._real if exp.engine == self._real.name else self._mock
-
-    async def start(self, experiment: Experiment) -> None:
-        engine = self._real if real_engine_ready() else self._mock
-        self._routes[experiment.id] = engine
-        await engine.start(experiment)
-
-    async def wait(self, exp_id: str) -> None:
-        engine = self._routes.get(exp_id)
-        if engine is not None:
-            await engine.wait(exp_id)
-
-    async def stop(self, exp_id: str) -> Experiment:
-        return await self._engine_for(exp_id).stop(exp_id)
-
-    async def export(self, exp_id: str, merge: bool = False) -> ExportResult:
-        return await self._engine_for(exp_id).export(exp_id, merge=merge)
-
-
-def build_engine(experiments: ExperimentService, datasets: DatasetManager) -> EngineRouter:
-    return EngineRouter(experiments, datasets)
+def build_engine(experiments: ExperimentService, datasets: DatasetManager) -> TrainingEngine:
+    return LlamaFactoryTrainingEngine(experiments, datasets)
