@@ -731,6 +731,25 @@ textarea.input {
   margin-bottom: 24px;
 }
 
+.demo-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #FFF4E5;
+  border: 1px solid #F0B86C;
+  border-left: 3px solid #E08A00;
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 24px;
+  font-size: 12.5px;
+  color: #7A4E00;
+}
+
+.demo-banner strong {
+  font-size: 13px;
+  color: #8A4B00;
+}
+
 /* ═══════════════════ Detail view ═══════════════════ */
 .detail-grid {
   display: grid;

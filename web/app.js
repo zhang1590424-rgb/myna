@@ -202,6 +202,13 @@ async function render() {
     } else if (view === "new") {
       await ensureMeta();
       await refreshCore();
+      // Engine mode can change after the user downloads a model, so re-check
+      // the live environment instead of trusting the cached value.
+      try {
+        state.environment = await api("/api/environment");
+      } catch {
+        /* keep cached environment on failure */
+      }
       renderNewExperiment(arg);
     } else if (view === "detail") {
       await ensureMeta();
@@ -510,6 +517,19 @@ function renderNewExperiment(cloneFromId) {
 
   const page = el("div", { class: "form-page" });
   view.appendChild(page);
+
+  if (state.environment && state.environment.engine === "mock") {
+    page.appendChild(
+      el("div", { class: "demo-banner" }, [
+        el("strong", {}, "当前是演示模式，训练结果不是真实的。"),
+        el(
+          "span",
+          {},
+          "还缺训练组件或本地模型。请先到模型页下载模型，下载完成后无需重启，回到这里再发起训练就会自动启用真实训练。"
+        ),
+      ])
+    );
+  }
 
   if (source) {
     page.appendChild(
@@ -854,6 +874,19 @@ async function renderDetail(id) {
       el("div", { class: "row-actions" }, actions),
     ])
   );
+
+  if (exp.engine === "mock") {
+    canvas.appendChild(
+      el("div", { class: "demo-banner" }, [
+        el("strong", {}, "这是演示模式的结果，不是真实训练。"),
+        el(
+          "span",
+          {},
+          "loss 曲线和产物都是模拟生成的，不能用于评估模型效果。请确认已下载本地模型，再重新发起一次训练即可得到真实结果（无需重启服务）。"
+        ),
+      ])
+    );
+  }
 
   if (exp.status === "running") {
     const pct = Math.round(exp.progress || 0);

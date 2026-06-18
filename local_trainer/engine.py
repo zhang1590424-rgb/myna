@@ -448,7 +448,54 @@ def real_engine_ready() -> bool:
     return status.llamafactory_ok and has_model
 
 
-def build_engine(experiments: ExperimentService, datasets: DatasetManager) -> TrainingEngine:
-    if real_engine_ready():
-        return LlamaFactoryTrainingEngine(experiments, datasets)
-    return MockTrainingEngine(experiments)
+class EngineRouter:
+    """Pick the engine per training run, not once at service startup.
+
+    Users usually download models *after* launching the service, so deciding
+    the engine at import time locked us into the mock engine forever — real
+    training never kicked in without a restart. Routing at start() time lets a
+    real run begin the moment the environment is ready, no restart needed.
+
+    Each experiment remembers which engine it actually ran on (in-process map
+    plus the persisted experiment.engine field), so stop / export always reach
+    the same engine even across restarts.
+    """
+
+    def __init__(self, experiments: ExperimentService, datasets: DatasetManager) -> None:
+        self.experiments = experiments
+        self._real = LlamaFactoryTrainingEngine(experiments, datasets)
+        self._mock = MockTrainingEngine(experiments)
+        self._routes: dict[str, TrainingEngine] = {}
+
+    @property
+    def name(self) -> str:
+        """Engine the next run would use, based on the current environment."""
+        return self._real.name if real_engine_ready() else self._mock.name
+
+    def _engine_for(self, exp_id: str) -> TrainingEngine:
+        route = self._routes.get(exp_id)
+        if route is not None:
+            return route
+        # Fall back to the engine recorded on the experiment (survives restarts).
+        exp = self.experiments.get(exp_id)
+        return self._real if exp.engine == self._real.name else self._mock
+
+    async def start(self, experiment: Experiment) -> None:
+        engine = self._real if real_engine_ready() else self._mock
+        self._routes[experiment.id] = engine
+        await engine.start(experiment)
+
+    async def wait(self, exp_id: str) -> None:
+        engine = self._routes.get(exp_id)
+        if engine is not None:
+            await engine.wait(exp_id)
+
+    async def stop(self, exp_id: str) -> Experiment:
+        return await self._engine_for(exp_id).stop(exp_id)
+
+    async def export(self, exp_id: str, merge: bool = False) -> ExportResult:
+        return await self._engine_for(exp_id).export(exp_id, merge=merge)
+
+
+def build_engine(experiments: ExperimentService, datasets: DatasetManager) -> EngineRouter:
+    return EngineRouter(experiments, datasets)
