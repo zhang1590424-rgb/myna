@@ -73,7 +73,7 @@ except Exception as exc:
     warn(f"无法检查 PyTorch MPS：{exc}")
 
 try:
-    from local_trainer.templates import get_model_catalog
+    from local_trainer.model_registry import get_model_catalog
 
     models = get_model_catalog()
     available = [model.name for model in models if model.available]
