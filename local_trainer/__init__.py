@@ -1,0 +1,1 @@
+"""Local trainer app package."""

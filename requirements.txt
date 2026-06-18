@@ -1,0 +1,14 @@
+# 小白训练师 — Python 依赖
+# 安装：python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# 注意：llamafactory 通常从本地 LLaMA-Factory/ 源码安装：
+#   .venv/bin/pip install -e ./LLaMA-Factory
+# 训练引擎相关大依赖（torch/transformers 等）会随 llamafactory 一并安装。
+# ruff 用于 Agent 安装后的 verify 检查。
+
+fastapi==0.137.1
+uvicorn==0.49.0
+pydantic==2.12.3
+python-multipart==0.0.32
+pyyaml==6.0.3
+modelscope==1.37.1
+ruff==0.15.17

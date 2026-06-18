@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>本地小白模型微调工具 — 交互原型</title>
+<style>
+  :root{
+    /* Codex-like: near-monochrome, restrained, one near-black accent */
+    --bg:        oklch(0.995 0.001 280);
+    --surface:   oklch(1 0 0);
+    --surface-2: oklch(0.975 0.002 280);
+    --surface-3: oklch(0.955 0.003 280);
+    --line:      oklch(0.915 0.003 280);
+    --line-strong: oklch(0.85 0.004 280);
+    --ink:       oklch(0.21 0.004 280);
+    --ink-soft:  oklch(0.45 0.004 280);
+    --ink-faint: oklch(0.63 0.004 280);
+    --accent:    oklch(0.27 0.005 280);   /* near-black, the only "strong" */
+    --accent-press: oklch(0.18 0.005 280);
+    --ok:        oklch(0.55 0.02 175);
+    --radius:    14px;
+    --radius-sm: 10px;
+    --shadow:    0 1px 2px oklch(0.3 0.02 280 / 0.05), 0 12px 32px oklch(0.3 0.02 280 / 0.05);
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --font: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+  body{
+    font-family:var(--font);
+    background:var(--bg);color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;display:flex;align-items:center;justify-content:center;
+    padding:28px;font-size:14px;
+  }
+  h1,h2,h3{font-weight:600;letter-spacing:-0.01em}
+
+  .app{
+    width:1000px;max-width:100%;height:680px;background:var(--surface);
+    border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  .titlebar{
+    height:44px;flex:none;display:flex;align-items:center;gap:8px;padding:0 16px;
+    border-bottom:1px solid var(--line);background:var(--surface);
+  }
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--line-strong)}
+  .titlebar .name{margin-left:10px;font-weight:600;font-size:13px;color:var(--ink-soft)}
+
+  .body{flex:1;display:flex;min-height:0}
+
+  /* Step rail */
+  .rail{
+    width:212px;flex:none;border-right:1px solid var(--line);background:var(--surface-2);
+    padding:18px 12px;display:flex;flex-direction:column;gap:2px;
+  }
+  .rail .logo{font-size:13px;color:var(--ink-faint);padding:6px 10px 16px;font-weight:600;letter-spacing:.02em}
+  .step{
+    display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:var(--radius-sm);
+    cursor:pointer;color:var(--ink-faint);transition:background .16s var(--ease),color .16s var(--ease);
+    font-size:13.5px;font-weight:500;border:none;background:none;text-align:left;width:100%;
+  }
+  .step:hover{background:var(--surface-3);color:var(--ink-soft)}
+  .step .num{
+    width:22px;height:22px;border-radius:50%;flex:none;display:grid;place-items:center;
+    background:var(--surface);border:1px solid var(--line-strong);color:var(--ink-faint);font-size:12px;font-weight:600;
+    transition:.16s var(--ease);
+  }
+  .step.active{background:var(--surface);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
+  .step.active .num{background:var(--accent);color:var(--surface);border-color:var(--accent)}
+  .step.done{color:var(--ink-soft)}
+  .step.done .num{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+  .rail .spacer{flex:1}
+  .rail .hint{font-size:11.5px;color:var(--ink-faint);line-height:1.6;padding:11px;background:var(--surface);border-radius:var(--radius-sm);border:1px solid var(--line)}
+
+  /* Main panel */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .scroll{flex:1;overflow:auto;padding:40px 48px}
+  .panel{display:none;animation:rise .35s var(--ease)}
+  .panel.show{display:block}
+  @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  .eyebrow{font-size:11.5px;font-weight:600;color:var(--ink-faint);letter-spacing:.06em;margin-bottom:12px}
+  .panel h2{font-size:24px;font-weight:600;margin-bottom:9px;letter-spacing:-0.02em}
+  .lede{font-size:14px;color:var(--ink-soft);line-height:1.65;max-width:64ch;margin-bottom:28px}
+
+  /* footer action bar */
+  .actions{
+    flex:none;height:70px;border-top:1px solid var(--line);background:var(--surface);
+    display:flex;align-items:center;justify-content:space-between;padding:0 48px;
+  }
+  .btn{
+    font-family:var(--font);font-size:14px;font-weight:600;border:none;border-radius:10px;padding:10px 20px;
+    cursor:pointer;transition:.15s var(--ease);
+  }
+  .btn-cta{background:var(--accent);color:var(--surface)}
+  .btn-cta:hover{background:var(--accent-press)}
+  .btn-ghost{background:none;color:var(--ink-faint)}
+  .btn-ghost:hover{color:var(--ink-soft);background:var(--surface-2)}
+  .btn-quiet{background:var(--surface);color:var(--ink-soft);box-shadow:inset 0 0 0 1px var(--line-strong)}
+  .btn-quiet:hover{background:var(--surface-2)}
+
+  /* Template cards (step 1) */
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .card{
+    border:1px solid var(--line);border-radius:var(--radius);padding:17px;cursor:pointer;
+    background:var(--surface);transition:border-color .16s var(--ease),background .16s var(--ease);
+  }
+  .card:hover{border-color:var(--line-strong);background:var(--surface-2)}
+  .card.sel{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+  .card .ic{width:30px;height:30px;color:var(--ink-soft);margin-bottom:13px}
+  .card.sel .ic{color:var(--ink)}
+  .card h3{font-size:14.5px;font-weight:600;margin-bottom:5px}
+  .card p{font-size:12.5px;color:var(--ink-faint);line-height:1.5}
+  .card.custom{border-style:dashed}
+
+  /* Upload (step 2) */
+  .drop{
+    border:1px dashed var(--line-strong);border-radius:var(--radius);padding:36px;text-align:center;
+    background:var(--surface-2);margin-bottom:18px;
+  }
+  .drop .ic{width:34px;height:34px;color:var(--ink-faint);margin:0 auto 14px}
+  .drop h3{font-size:15px;font-weight:600;margin-bottom:6px}
+  .drop p{font-size:13px;color:var(--ink-faint)}
+  .filebar{display:flex;align-items:center;gap:12px;padding:14px 16px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);margin-bottom:14px}
+  .filebar .fi{width:32px;height:32px;border-radius:8px;background:var(--surface-3);color:var(--ink-soft);display:grid;place-items:center;flex:none}
+  .filebar .meta{flex:1}
+  .filebar .meta b{font-size:13.5px;font-weight:600;display:block}
+  .filebar .meta span{font-size:12px;color:var(--ink-faint)}
+  .filebar .ok{font-size:12.5px;color:var(--ink-soft);font-weight:600;display:flex;align-items:center;gap:5px}
+  .filebar .ok svg{color:var(--ok)}
+  .sample{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-soft);cursor:pointer;font-weight:600}
+  .sample:hover{color:var(--ink)}
+
+  /* Confirm (step 3) */
+  .summary{
+    background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius);
+    padding:22px 24px;margin-bottom:16px;font-size:16px;line-height:1.7;color:var(--ink);
+  }
+  .summary b{font-weight:600;box-shadow:inset 0 -8px 0 var(--surface-3)}
+  details.adv{border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);overflow:hidden}
+  details.adv>summary{padding:14px 18px;cursor:pointer;font-size:13.5px;font-weight:600;color:var(--ink-soft);list-style:none;display:flex;align-items:center;gap:9px}
+  details.adv>summary::-webkit-details-marker{display:none}
+  details.adv>summary .chev{transition:transform .2s var(--ease);margin-left:auto;color:var(--ink-faint)}
+  details.adv[open]>summary .chev{transform:rotate(90deg)}
+  .advgrid{padding:4px 18px 18px;display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .field label{font-size:12px;color:var(--ink-faint);display:block;margin-bottom:5px;font-weight:500}
+  .field input{width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:13.5px;color:var(--ink);background:var(--surface-2)}
+  .field input:focus{outline:none;border-color:var(--line-strong);background:var(--surface)}
+
+  /* Training (step 4) */
+  .trainwrap{text-align:center;padding:10px 0 4px}
+  .pct{font-size:46px;font-weight:600;color:var(--ink);line-height:1;letter-spacing:-0.02em}
+  .trainstate{font-size:14.5px;color:var(--ink-soft);margin:10px 0 22px}
+  .bar{height:6px;background:var(--surface-3);border-radius:99px;overflow:hidden;max-width:520px;margin:0 auto 10px}
+  .bar i{display:block;height:100%;width:62%;background:var(--accent);border-radius:99px}
+  .subnote{font-size:12.5px;color:var(--ink-faint);margin-bottom:24px}
+  .chips{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+  .chip{font-size:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:99px;padding:5px 13px;color:var(--ink-soft);font-weight:500}
+
+  /* Compare (step 5) */
+  .compare{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+  .col{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;display:flex;flex-direction:column}
+  .col .head{padding:11px 16px;font-size:12.5px;font-weight:600;border-bottom:1px solid var(--line);color:var(--ink-faint)}
+  .col.after{border-color:var(--line-strong)}
+  .col.after .head{color:var(--ink);background:var(--surface-2)}
+  .col .body2{padding:16px;font-size:13px;line-height:1.6;flex:1;min-height:118px}
+  .bubble{background:var(--surface-2);border-radius:10px;padding:11px 13px;color:var(--ink)}
+  .col.after .bubble{background:var(--surface-3)}
+  .askbar{display:flex;gap:10px}
+  .askbar input{flex:1;padding:12px 16px;border:1px solid var(--line);border-radius:10px;font:inherit;font-size:14px;background:var(--surface-2)}
+  .askbar input:focus{outline:none;border-color:var(--line-strong);background:var(--surface)}
+  .done-banner{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:var(--radius-sm);padding:13px 16px;margin-bottom:22px;color:var(--ink-soft);font-weight:600;font-size:13.5px}
+  .done-banner svg{color:var(--ok);flex:none}
+
+  /* Welcome / prepare (step 0) */
+  .center{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:40px}
+  .center .big{width:48px;height:48px;color:var(--ink-soft);margin-bottom:22px}
+  .center h2{font-size:22px;font-weight:600;margin-bottom:10px}
+  .center p{font-size:14px;color:var(--ink-soft);max-width:46ch;line-height:1.65;margin-bottom:24px}
+  .prepbar{width:340px;height:6px;background:var(--surface-3);border-radius:99px;overflow:hidden;margin-bottom:12px}
+  .prepbar i{display:block;height:100%;width:45%;background:var(--accent);border-radius:99px}
+  .onlyfirst{font-size:12px;color:var(--ink-faint)}
+
+  svg{display:block;stroke-width:1.5}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="titlebar">
+    <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+    <span class="name">小白训练师</span>
+  </div>
+  <div class="body">
+    <!-- Step rail -->
+    <nav class="rail">
+      <div class="logo">小白训练师</div>
+      <button class="step" data-go="0"><span class="num">0</span>准备环境</button>
+      <button class="step active" data-go="1"><span class="num">1</span>选方向</button>
+      <button class="step" data-go="2"><span class="num">2</span>喂数据</button>
+      <button class="step" data-go="3"><span class="num">3</span>确认设置</button>
+      <button class="step" data-go="4"><span class="num">4</span>开始训练</button>
+      <button class="step" data-go="5"><span class="num">5</span>试用对比</button>
+      <div class="spacer"></div>
+      <div class="hint">不懂没关系。每一步都给你预设好了,跟着点"下一步"就行。</div>
+    </nav>
+
+    <!-- Main -->
+    <div class="main">
+      <div class="scroll">
+
+        <!-- Step 0: prepare -->
+        <section class="panel" data-panel="0">
+          <div class="center">
+            <div class="big">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+            </div>
+            <h2>正在为你准备训练环境</h2>
+            <p>第一次使用需要下载基础模型和运行组件(约 2.4 GB)。喝杯水,这只在第一次需要。</p>
+            <div class="prepbar"><i></i></div>
+            <div class="onlyfirst">已下载 1.1 GB / 2.4 GB · 正在准备,仅首次需要</div>
+          </div>
+        </section>
+
+        <!-- Step 1: choose direction -->
+        <section class="panel show" data-panel="1">
+          <div class="eyebrow">第 1 步 / 共 5 步</div>
+          <h2>你想教 AI 学会做什么?</h2>
+          <p class="lede">选一个方向,我们会自动帮你配好合适的模型和训练设置。不确定就先选"客服话术"试试,随时能改。</p>
+          <div class="grid">
+            <div class="card sel">
+              <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg></div>
+              <h3>客服话术</h3>
+              <p>让 AI 用你们家的口吻回答顾客问题</p>
+            </div>
+            <div class="card">
+              <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><circle cx="12" cy="14" r="4"/><path d="M3 10h18"/></svg></div>
+              <h3>角色扮演</h3>
+              <p>让 AI 扮演特定人设或角色说话</p>
+            </div>
+            <div class="card">
+              <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></div>
+              <h3>文本改写</h3>
+              <p>按你的规则改写、润色、转换文本</p>
+            </div>
+            <div class="card">
+              <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div>
+              <h3>知识问答</h3>
+              <p>让 AI 学会你领域里的专业知识</p>
+            </div>
+            <div class="card custom">
+              <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg></div>
+              <h3>自定义</h3>
+              <p>自己定义训练目标和数据</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Step 2: data -->
+        <section class="panel" data-panel="2">
+          <div class="eyebrow">第 2 步 / 共 5 步</div>
+          <h2>把你的数据喂给它</h2>
+          <p class="lede">上传一份"问题—回答"的对话记录就行。不知道格式?下载示例照着填,或直接用示例数据先体验一遍。</p>
+          <div class="drop">
+            <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m17 8-5-5-5 5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/></svg></div>
+            <h3>把文件拖到这里,或点击选择</h3>
+            <p>支持 Excel / CSV / JSON,我们会自动检查格式</p>
+          </div>
+          <div class="filebar">
+            <div class="fi"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></div>
+            <div class="meta"><b>客服对话记录.xlsx</b><span>已识别 120 条有效数据</span></div>
+            <div class="ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>格式没问题</div>
+          </div>
+          <div class="sample">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+            下载示例数据 · 不知道怎么准备就先看这个
+          </div>
+        </section>
+
+        <!-- Step 3: confirm -->
+        <section class="panel" data-panel="3">
+          <div class="eyebrow">第 3 步 / 共 5 步</div>
+          <h2>确认一下就开始</h2>
+          <p class="lede">下面这些已经帮你配好了。直接开始就行,想自己调的话再展开"高级设置"。</p>
+          <div class="summary">
+            将基于 <b>Qwen2.5-1.5B</b> 模型,用你的 <b>120 条</b>数据,训练一个<b>客服话术</b> AI。预计耗时 <b>约 8 分钟</b>。
+          </div>
+          <details class="adv">
+            <summary>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              高级设置(可以不用管)
+              <span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></span>
+            </summary>
+            <div class="advgrid">
+              <div class="field"><label>训练轮数 (epochs)</label><input value="3" /></div>
+              <div class="field"><label>学习率 (learning rate)</label><input value="0.0002" /></div>
+              <div class="field"><label>LoRA 秩 (rank)</label><input value="8" /></div>
+              <div class="field"><label>批大小 (batch size)</label><input value="2" /></div>
+            </div>
+          </details>
+        </section>
+
+        <!-- Step 4: training -->
+        <section class="panel" data-panel="4">
+          <div class="eyebrow">第 4 步 / 共 5 步</div>
+          <h2>正在训练你的 AI</h2>
+          <p class="lede">它正在学习你的数据。可以离开去忙别的,完成后会提醒你。</p>
+          <div class="trainwrap">
+            <div class="pct">62%</div>
+            <div class="trainstate">正在学习第 2 轮,共 3 轮…</div>
+            <div class="bar"><i></i></div>
+            <div class="subnote">已用 5 分钟 · 预计还需 3 分钟</div>
+            <div class="chips">
+              <span class="chip">已学习 74 / 120 条</span>
+              <span class="chip">越学越熟练</span>
+            </div>
+          </div>
+          <details class="adv" style="margin-top:20px">
+            <summary>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+              查看专业指标(loss 曲线)
+              <span class="chev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></span>
+            </summary>
+            <div style="padding:18px">
+              <svg width="100%" height="120" viewBox="0 0 400 120" preserveAspectRatio="none">
+                <polyline points="0,18 50,40 100,55 150,68 200,76 250,84 300,90 350,94 400,96" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <div style="font-size:12px;color:var(--ink-faint);text-align:center;margin-top:6px">loss 在下降,代表模型在变好</div>
+            </div>
+          </details>
+        </section>
+
+        <!-- Step 5: compare -->
+        <section class="panel" data-panel="5">
+          <div class="eyebrow">第 5 步 / 共 5 步 · 完成</div>
+          <div class="done-banner">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+            训练完成,试试看它学到了什么
+          </div>
+          <h2>同一个问题,看看前后差别</h2>
+          <p class="lede" style="margin-bottom:18px">左边是没训练过的原模型,右边是你刚训练好的。输入一句话,对比它们的回答。</p>
+          <div class="compare">
+            <div class="col before">
+              <div class="head">训练前(原模型)</div>
+              <div class="body2"><div class="bubble">您好,关于退货问题,建议您查阅相关条款或联系客服处理,谢谢。</div></div>
+            </div>
+            <div class="col after">
+              <div class="head">训练后(你的 AI)</div>
+              <div class="body2"><div class="bubble">亲~退货超简单的!7天内无理由,您把订单号发我,我这就帮您安排上门取件,运费咱们包啦。</div></div>
+            </div>
+          </div>
+          <div class="askbar">
+            <input value="顾客问怎么退货,怎么回?" />
+            <button class="btn btn-cta">对比回答</button>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- action bar -->
+      <div class="actions">
+        <button class="btn btn-ghost" id="back">上一步</button>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-quiet" id="export" style="display:none">导出模型</button>
+          <button class="btn btn-cta" id="next">下一步</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const panels=[...document.querySelectorAll('.panel')];
+  const steps=[...document.querySelectorAll('.step')];
+  let cur=1;
+  const labels={0:'准备',1:'下一步',2:'下一步',3:'开始训练',4:'查看结果',5:'完成'};
+  function render(){
+    panels.forEach(p=>p.classList.toggle('show',+p.dataset.panel===cur));
+    steps.forEach(s=>{
+      const n=+s.dataset.go;
+      s.classList.toggle('active',n===cur);
+      s.classList.toggle('done',n<cur);
+    });
+    document.getElementById('next').textContent=labels[cur]||'下一步';
+    document.getElementById('back').style.visibility=cur<=1?'hidden':'visible';
+    document.getElementById('export').style.display=cur===5?'inline-block':'none';
+    document.getElementById('next').style.display=cur===5?'none':'inline-block';
+  }
+  steps.forEach(s=>s.addEventListener('click',()=>{cur=+s.dataset.go;render()}));
+  document.getElementById('next').addEventListener('click',()=>{if(cur<5){cur++;render()}});
+  document.getElementById('back').addEventListener('click',()=>{if(cur>0){cur--;render()}});
+  document.querySelectorAll('[data-panel="1"] .card').forEach(c=>c.addEventListener('click',()=>{
+    document.querySelectorAll('[data-panel="1"] .card').forEach(x=>x.classList.remove('sel'));c.classList.add('sel');
+  }));
+  render();
+</script>
+</body>
+</html>
