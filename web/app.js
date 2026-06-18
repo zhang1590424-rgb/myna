@@ -1,5 +1,6 @@
 const state = {
   step: 0,
+  environment: null,
   templates: [],
   models: [],
   presets: [],
@@ -25,6 +26,7 @@ const compareInput = document.querySelector("#compareInput");
 const fileInput = document.querySelector("#fileInput");
 const dropzone = document.querySelector("#dropzone");
 const localAddress = document.querySelector(".local-address");
+const refreshEnvironmentButton = document.querySelector("#refreshEnvironmentButton");
 
 async function api(path, options = {}) {
   const response = await fetch(path, options);
@@ -49,6 +51,10 @@ function activeModel() {
   return state.models.find((item) => item.id === state.selectedModelId);
 }
 
+function hasUsableModel() {
+  return state.models.some((item) => item.available);
+}
+
 async function init() {
   if (localAddress) {
     localAddress.textContent = window.location.host || "127.0.0.1:4180";
@@ -61,14 +67,15 @@ async function init() {
   ]);
   state.templates = templates;
   state.models = models;
+  state.environment = environment;
   state.presets = presets;
   state.selectedModelId = models.find((item) => item.recommended && item.available)?.id || models.find((item) => item.available)?.id || models[0]?.id;
   state.selectedPresetId = presets.find((item) => item.recommended)?.id || presets[0]?.id || "standard";
   applyPreset(state.selectedPresetId);
   resetComparePrompt();
-  renderEnvironment(environment);
   renderTemplates();
   renderModels();
+  renderEnvironment(environment);
   renderPresets();
   bindEvents();
   render();
@@ -86,6 +93,7 @@ function bindEvents() {
   });
 
   nextButton.addEventListener("click", handleNext);
+  refreshEnvironmentButton?.addEventListener("click", refreshEnvironment);
   backButton.addEventListener("click", () => {
     state.step = Math.max(0, state.step - 1);
     render();
@@ -140,37 +148,37 @@ function bindEvents() {
 }
 
 function canEnterStep(step) {
-  if (step <= 1) {
+  if (step <= 0) {
     return true;
   }
-  if (step === 2) {
-    return Boolean(state.selectedTemplateId);
+  if (step === 1) {
+    return hasUsableModel();
   }
-  if (step === 3) {
+  if (step === 2) {
     return Boolean(state.dataset);
   }
-  if (step === 4) {
+  if (step === 3) {
     return Boolean(state.job);
   }
-  if (step === 5) {
+  if (step === 4) {
     return state.job?.status === "completed";
   }
   return false;
 }
 
 async function handleNext() {
-  if (state.step === 2 && !state.dataset) {
+  if (state.step === 1 && !state.dataset) {
     setStatus("#datasetStatus", "请先上传数据，或者下载示例数据试一遍。", true);
     return;
   }
-  if (state.step === 3) {
+  if (state.step === 2) {
     await startTraining();
     return;
   }
-  if (state.step === 4 && state.job?.status !== "completed") {
+  if (state.step === 3 && state.job?.status !== "completed") {
     return;
   }
-  if (state.step < 5) {
+  if (state.step < 4) {
     state.step += 1;
     render();
   }
@@ -193,35 +201,112 @@ function render() {
 
 function renderActions() {
   backButton.style.visibility = state.step === 0 ? "hidden" : "visible";
-  const canExport = state.step === 5 && state.job?.status === "completed";
+  const canExport = state.step === 4 && state.job?.status === "completed";
   exportButton.hidden = !canExport;
   exportMergeButton.hidden = !canExport;
-  nextButton.hidden = state.step === 5;
+  nextButton.hidden = state.step === 4;
 
   const labels = {
-    0: "开始体验",
+    0: "继续上传数据",
     1: "下一步",
-    2: "下一步",
-    3: "开始训练",
-    4: "查看结果",
+    2: "开始训练",
+    3: "查看结果",
   };
   nextButton.textContent = labels[state.step] || "下一步";
-  nextButton.disabled = state.step === 4 && state.job?.status !== "completed";
+  nextButton.disabled = (state.step === 0 && !hasUsableModel()) || (state.step === 3 && state.job?.status !== "completed");
 }
 
 function renderEnvironment(environment) {
+  state.environment = environment;
   document.querySelector("#environmentMessage").textContent = environment.message;
   document.querySelector("#environmentProgress").style.width = `${environment.progress}%`;
   document.querySelector("#enginePill").textContent =
     environment.engine === "llamafactory" ? "真实训练已就绪" : "演示模式";
-  document.querySelector("#environmentFacts").innerHTML = [
-    environment.llamafactory_ok ? "LLaMA-Factory 已安装" : "缺少 LLaMA-Factory",
-    environment.torch_mps_ok ? "检测到 MPS" : "未检测到 MPS",
-    environment.model_status.some((item) => item.available) ? "已有本地模型" : "暂无本地模型",
-    environment.engine === "llamafactory" ? "训练为真实微调" : "训练为模拟演示",
-  ]
-    .map((text) => `<span class="fact-pill">${text}</span>`)
-    .join("");
+  const modelReady = environment.model_status.some((item) => item.available);
+  document.querySelector("#environmentChecklist").innerHTML = [
+    dependencyItem({
+      title: "Python 本地服务",
+      ok: environment.python_ok,
+      detail: environment.python_ok ? "已通过当前服务启动。" : "请先运行安装脚本。",
+      action: environment.python_ok ? "" : "复制安装命令",
+      command: "scripts/install.command",
+    }),
+    dependencyItem({
+      title: "LLaMA-Factory 训练组件",
+      ok: environment.llamafactory_ok,
+      detail: environment.llamafactory_ok ? "真实训练组件已安装。" : "缺少训练组件，会降级为演示模式。",
+      action: environment.llamafactory_ok ? "" : "复制安装命令",
+      command: "scripts/install.command",
+    }),
+    dependencyItem({
+      title: "Apple GPU 加速",
+      ok: environment.torch_mps_ok,
+      optional: true,
+      detail: environment.torch_mps_ok ? "已检测到 MPS，可用 Mac GPU 训练。" : "未检测到 MPS，真实训练会更慢。",
+      action: "",
+      command: "",
+    }),
+    dependencyItem({
+      title: "本地基础模型",
+      ok: modelReady,
+      detail: modelReady ? "已有可用模型，可以继续上传数据。" : "请选择一个模型下载，第一次建议 0.5B。",
+      action: "",
+      command: "",
+    }),
+  ].join("");
+  document.querySelectorAll("[data-copy-command]").forEach((button) => {
+    button.addEventListener("click", () => copyCommand(button.dataset.copyCommand));
+  });
+  setStatus(
+    "#environmentStatus",
+    modelReady ? "环境检查完成。模型和数据都只保存在本机。" : "还没有可用模型，请先在右侧下载一个。",
+    !modelReady,
+  );
+}
+
+function dependencyItem({ title, ok, optional = false, detail, action, command }) {
+  const stateClass = ok ? "ok" : optional ? "warn" : "missing";
+  const stateText = ok ? "已就绪" : optional ? "可选优化" : "未就绪";
+  const button = action
+    ? `<button class="text-button" type="button" data-copy-command="${command}">${action}</button>`
+    : "";
+  return `
+    <div class="dependency-item ${stateClass}">
+      <span class="dependency-dot" aria-hidden="true">${ok ? "✓" : optional ? "!" : "×"}</span>
+      <div>
+        <strong>${title}</strong>
+        <p>${detail}</p>
+      </div>
+      <em>${stateText}</em>
+      ${button}
+    </div>
+  `;
+}
+
+async function copyCommand(command) {
+  if (!command) {
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(command);
+    setStatus("#environmentStatus", `已复制：${command}`);
+  } catch {
+    setStatus("#environmentStatus", `请在项目根目录运行：${command}`);
+  }
+}
+
+async function refreshEnvironment() {
+  setStatus("#environmentStatus", "正在重新检测。");
+  const [environment, models] = await Promise.all([api("/api/environment"), api("/api/models")]);
+  state.models = models;
+  if (!activeModel()?.available) {
+    state.selectedModelId =
+      models.find((item) => item.recommended && item.available)?.id || models.find((item) => item.available)?.id || models[0]?.id;
+  }
+  renderModels();
+  renderEnvironment(environment);
+  renderSummary();
+  renderActions();
 }
 
 function renderTemplates() {
@@ -246,9 +331,12 @@ function renderTemplates() {
       resetComparePrompt();
       renderTemplates();
       renderDatasetCard();
+      renderDatasetHint();
       renderSummary();
+      render();
     });
   });
+  renderDatasetHint();
 }
 
 function renderModels() {
@@ -258,7 +346,7 @@ function renderModels() {
       const selected = model.id === state.selectedModelId ? " selected" : "";
       const disabled = model.available ? "" : " disabled";
       const action = model.available
-        ? `<span class="model-tag">已就绪</span>`
+        ? `<span class="model-tag">${selected ? "当前使用" : "已就绪"}</span>`
         : `<button class="model-download-btn" type="button" data-download-id="${model.id}">下载 (${model.download_size_label || ""})</button>`;
       return `
         <div class="model-card${selected}${disabled}" data-model-id="${model.id}">
@@ -321,10 +409,13 @@ function pollModelDownload(modelId) {
     if (status.state === "completed" || status.state === "failed") {
       window.clearInterval(state.downloadTimers[modelId]);
       if (status.state === "completed") {
-        state.models = await api("/api/models");
+        const [environment, models] = await Promise.all([api("/api/environment"), api("/api/models")]);
+        state.models = models;
         state.selectedModelId = modelId;
         renderModels();
+        renderEnvironment(environment);
         renderSummary();
+        renderActions();
       }
     }
   }, 1500);
@@ -414,8 +505,24 @@ function renderSummary() {
   }
   const count = state.dataset?.valid_count || 0;
   document.querySelector("#trainingSummary").innerHTML = `
-    将基于 <b>${model.name}</b>，用你的 <b>${count || "待上传"} 条</b>数据，训练一个<b>${template.goal_label}</b>。第一次建议先用默认参数跑通。
+    将基于 <b>${model.name}</b>，用你的 <b>${count || "待上传"} 条</b>数据，训练一个<b>${template.goal_label}</b>。第一次建议先用标准档跑通。
   `;
+}
+
+function renderDatasetHint() {
+  const template = activeTemplate();
+  if (!template) {
+    return;
+  }
+  const hints = {
+    customer_service: "适合 question,answer 或 问题,回答：一列顾客问题，一列标准回复。",
+    knowledge_qa: "适合 question,answer 或 问题,答案：一列知识问题，一列准确答案。",
+    roleplay: "适合 question,answer：一列用户说的话，一列你希望 AI 使用的语气回答。",
+    rewrite: "适合 question,answer：一列原文或改写要求，一列改写后的目标文本。",
+    custom: "不确定也可以先用 question,answer。每行一条输入和理想输出。",
+  };
+  document.querySelector("#datasetHint").textContent = hints[template.id] || hints.custom;
+  document.querySelector("#templateHelp").textContent = `${template.description}。示例数据和默认对比问题会跟着变化。`;
 }
 
 function resetComparePrompt() {
@@ -428,6 +535,10 @@ function resetComparePrompt() {
 async function startTraining() {
   if (!state.dataset) {
     setStatus("#confirmStatus", "还没有可训练数据，请先回到上一步上传。", true);
+    return;
+  }
+  if (!activeModel()?.available) {
+    setStatus("#confirmStatus", "还没有可用模型，请先回到准备环境页下载模型。", true);
     return;
   }
   setStatus("#confirmStatus", "正在创建训练任务。");
@@ -443,7 +554,7 @@ async function startTraining() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    state.step = 4;
+    state.step = 3;
     setStatus("#confirmStatus", "");
     render();
     pollJob();

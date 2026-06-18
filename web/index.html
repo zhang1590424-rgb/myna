@@ -26,48 +26,60 @@
         <nav class="rail" aria-label="训练步骤">
           <div class="rail-logo">训练流程</div>
           <button class="step" type="button" data-step="0"><span>0</span>准备环境</button>
-          <button class="step" type="button" data-step="1"><span>1</span>选方向</button>
-          <button class="step" type="button" data-step="2"><span>2</span>喂数据</button>
-          <button class="step" type="button" data-step="3"><span>3</span>确认设置</button>
-          <button class="step" type="button" data-step="4"><span>4</span>开始训练</button>
-          <button class="step" type="button" data-step="5"><span>5</span>试用对比</button>
+          <button class="step" type="button" data-step="1"><span>1</span>训练数据</button>
+          <button class="step" type="button" data-step="2"><span>2</span>确认设置</button>
+          <button class="step" type="button" data-step="3"><span>3</span>开始训练</button>
+          <button class="step" type="button" data-step="4"><span>4</span>试用对比</button>
           <div class="rail-spacer"></div>
-          <p class="rail-note">数据和模型都保存在这台 Mac。让 Agent 安装时，可先运行 doctor 检查状态。</p>
+          <p class="rail-note">数据、模型和训练产物都保存在这台 Mac。准备环境通过后再上传数据。</p>
         </nav>
 
         <main class="main">
           <div class="content">
             <section class="panel" data-panel="0">
-              <div class="center-panel">
-                <div class="big-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 3v12" />
-                    <path d="m8 11 4 4 4-4" />
-                    <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
-                  </svg>
-                </div>
-                <p class="eyebrow">第 0 步</p>
-                <h1>正在检查训练环境</h1>
-                <p class="lede" id="environmentMessage">正在连接本地服务。</p>
-                <p class="agent-note">如果是 Agent 帮你安装，它会先执行安装、检查和验证脚本。这里显示的是最终可用状态。</p>
+              <p class="eyebrow">第 0 步 / 共 4 步</p>
+              <h1>先把训练环境准备好</h1>
+              <p class="lede" id="environmentMessage">正在连接本地服务。</p>
+              <div class="environment-layout">
+                <section class="environment-block">
+                  <div class="section-head">
+                    <div>
+                      <h2>依赖检测</h2>
+                      <p>缺组件时先按提示修复，模型可以在右侧直接下载。</p>
+                    </div>
+                    <button class="btn btn-quiet btn-small" type="button" id="refreshEnvironmentButton">重新检测</button>
+                  </div>
                 <div class="progress-track" aria-label="环境准备进度">
                   <i id="environmentProgress"></i>
                 </div>
-                <div class="fact-row" id="environmentFacts"></div>
+                  <div class="dependency-list" id="environmentChecklist"></div>
+                  <p class="inline-status" id="environmentStatus"></p>
+                </section>
+                <section class="environment-block">
+                  <div class="section-head">
+                    <div>
+                      <h2>本地模型</h2>
+                      <p>第一次建议用 0.5B，速度和成功率优先。</p>
+                    </div>
+                  </div>
+                  <div class="model-grid" id="modelGrid"></div>
+                </section>
               </div>
             </section>
 
             <section class="panel" data-panel="1">
-              <p class="eyebrow">第 1 步 / 共 5 步</p>
-              <h1>你想教 AI 学会做什么？</h1>
-              <p class="lede">选一个方向，模型和训练设置会自动预填。不确定就先从客服话术开始。</p>
-              <div class="template-grid" id="templateGrid"></div>
-            </section>
-
-            <section class="panel" data-panel="2">
-              <p class="eyebrow">第 2 步 / 共 5 步</p>
+              <p class="eyebrow">第 1 步 / 共 4 步</p>
               <h1>把你的数据喂给它</h1>
-              <p class="lede">上传包含问题和回答的数据。支持 CSV、JSON、JSONL、基础 XLSX。</p>
+              <p class="lede">先选数据更像哪一类，再上传文件。这个选择只影响示例、提示词和训练后的默认对比问题。</p>
+              <div class="type-panel">
+                <div class="section-head">
+                  <div>
+                    <h2>你的数据主要是哪类？</h2>
+                    <p id="templateHelp">不确定就先用客服问答，后面仍然可以换。</p>
+                  </div>
+                </div>
+                <div class="template-grid template-grid-compact" id="templateGrid"></div>
+              </div>
               <input id="fileInput" type="file" accept=".csv,.json,.jsonl,.xlsx" hidden />
               <button class="dropzone" type="button" id="dropzone">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -76,7 +88,7 @@
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                 </svg>
                 <strong>把文件拖到这里，或点击选择</strong>
-                <span>表头可以用 question,answer，也可以用 问题,回答。</span>
+                <span id="datasetHint">表头可以用 question,answer，也可以用 问题,回答。</span>
               </button>
               <div class="file-card" id="datasetCard" hidden></div>
               <p class="inline-status" id="datasetStatus"></p>
@@ -85,8 +97,8 @@
               </a>
             </section>
 
-            <section class="panel" data-panel="3">
-              <p class="eyebrow">第 3 步 / 共 5 步</p>
+            <section class="panel" data-panel="2">
+              <p class="eyebrow">第 2 步 / 共 4 步</p>
               <h1>确认一下就开始</h1>
               <p class="lede">这些设置已经按你的方向预填。第一次训练建议不要改高级参数。</p>
               <div class="summary" id="trainingSummary"></div>
@@ -120,13 +132,12 @@
                     <small>每次同时看几条数据。Mac 上建议保持 2，调大可能内存不够。</small>
                   </label>
                 </div>
-                <div class="model-grid" id="modelGrid"></div>
               </details>
               <p class="inline-status" id="confirmStatus"></p>
             </section>
 
-            <section class="panel" data-panel="4">
-              <p class="eyebrow">第 4 步 / 共 5 步</p>
+            <section class="panel" data-panel="3">
+              <p class="eyebrow">第 3 步 / 共 4 步</p>
               <h1>正在训练你的 AI</h1>
               <p class="lede">现在可以离开去做别的事。完成后回来对比同一句话的变化。</p>
               <div class="training-panel">
@@ -153,8 +164,8 @@
               <button class="btn btn-quiet stop-btn" type="button" id="stopButton">停止训练</button>
             </section>
 
-            <section class="panel" data-panel="5">
-              <p class="eyebrow">第 5 步 / 共 5 步</p>
+            <section class="panel" data-panel="4">
+              <p class="eyebrow">第 4 步 / 共 4 步</p>
               <div class="done-banner">训练完成，试试看它学到了什么</div>
               <h1>同一个问题，看前后差别</h1>
               <p class="lede">左边是训练前，右边是训练后的风格变化。环境未就绪时会明确标注演示模式，真实训练会加载本机模型对比。</p>
