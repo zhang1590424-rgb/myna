@@ -39,6 +39,18 @@ bash scripts/verify.command
 bash scripts/start.command
 ```
 
+### 可选：首次安装时预下载入门模型
+
+启动成功后，建议顺手把推荐的入门模型 **Qwen3.5-0.8B**（约 2GB）下载到本地，这样用户打开界面就能直接开始用，不必进去才发现还要等下载。
+
+在项目根目录执行（**必须用与界面相同的下载器和 `models/` 目录**，不要换成 huggingface-cli 等其他工具，否则界面识别不到已下载的模型）：
+
+```bash
+MODELSCOPE_DOWNLOAD_PARALLELS=4 .venv/bin/python -c "from modelscope import snapshot_download; snapshot_download('Qwen/Qwen3.5-0.8B', cache_dir='models', max_workers=8)"
+```
+
+这一步**可选**：下载失败不影响部署是否成功，告知用户即可，用户之后可在界面「模型」页面手动下载。
+
 ### 成功标志
 
 - `install.command` 最后输出 `[install] 安装完成`
