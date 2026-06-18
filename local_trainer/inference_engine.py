@@ -42,7 +42,7 @@ class InferenceEngine:
     def load(self, experiment_id: str, use_adapter: bool = True) -> LabStatus:
         exp = self.experiments.get(experiment_id)
         if exp.status != "completed" or not exp.output_dir:
-            raise RuntimeError("只有训练完成的实验才能加载到实验室。")
+            raise RuntimeError("只有训练完成的实验才能加载到测评。")
         self._experiment_id = experiment_id
         self._use_adapter = use_adapter
         return self.status()

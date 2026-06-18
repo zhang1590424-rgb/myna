@@ -228,7 +228,7 @@ class LlamaFactoryTrainingEngine:
                 finished_at=utc_now(),
                 eta=None,
                 metrics=metrics,
-                message="训练完成，可以到实验室试试它学到了什么。",
+                message="训练完成，可以到测评试试它学到了什么。",
             )
             return
 

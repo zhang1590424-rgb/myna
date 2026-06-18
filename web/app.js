@@ -26,7 +26,7 @@ const state = {
   selectedForCompare: new Set(),
   pollTimer: null,
   downloadTimers: {},
-  labResults: [],       // 缓存实验室对比结果
+  labResults: [],       // 缓存测评对比结果
   labPending: false,    // 是否有进行中的请求
 };
 
@@ -803,7 +803,7 @@ async function renderDetail(id) {
     actions.push(
       el("a", { class: "btn", href: `/api/experiments/${id}/export` }, "导出 LoRA"),
       el("a", { class: "btn", href: `/api/experiments/${id}/export?merge=true` }, "导出完整模型"),
-      el("button", { class: "btn", onClick: () => navigate(`/lab`) }, "去实验室试用")
+      el("button", { class: "btn", onClick: () => navigate(`/lab`) }, "去测评试用")
     );
   }
   actions.push(
@@ -1516,7 +1516,7 @@ async function renderLab() {
   canvas.appendChild(
     el("div", { class: "view-head" }, [
       el("div", {}, [
-        el("h1", { class: "view-title" }, "实验室"),
+        el("h1", { class: "view-title" }, "测评"),
         el("p", { class: "view-sub" }, "对比训练前后的效果：同一个问题，看看模型学到了什么。"),
       ]),
     ])
