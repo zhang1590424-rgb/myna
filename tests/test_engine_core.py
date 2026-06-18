@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
+from local_trainer.dataset_manager import DatasetManager
 from local_trainer.engine import (
-    JobStore,
     LlamaFactoryTrainingEngine,
     MockTrainingEngine,
     build_engine,
     parse_trainer_log,
 )
+from local_trainer.experiment_service import ExperimentService
 from local_trainer.hardware import select_precision
+from local_trainer.persistence import Database
 
 
 class TrainerLogParsingTests(unittest.TestCase):
@@ -53,19 +57,22 @@ class PrecisionPolicyTests(unittest.TestCase):
         self.assertFalse(precision["fp16"])
 
 
-class _FakeDatasetStore:
-    pass
-
-
 class EngineFactoryTests(unittest.TestCase):
+    def _build_services(self, temp_dir: str) -> tuple[ExperimentService, DatasetManager]:
+        db = Database(db_path=Path(temp_dir) / "workbench.db")
+        datasets = DatasetManager(db, root=Path(temp_dir) / "datasets")
+        experiments = ExperimentService(db, datasets)
+        return experiments, datasets
+
     def test_returns_real_engine_when_ready(self) -> None:
-        store = JobStore()
         import local_trainer.engine as engine_module
 
         original = engine_module.real_engine_ready
         engine_module.real_engine_ready = lambda: True
         try:
-            engine = build_engine(store, _FakeDatasetStore())
+            with tempfile.TemporaryDirectory() as temp_dir:
+                experiments, datasets = self._build_services(temp_dir)
+                engine = build_engine(experiments, datasets)
         finally:
             engine_module.real_engine_ready = original
 
@@ -73,13 +80,14 @@ class EngineFactoryTests(unittest.TestCase):
         self.assertEqual(engine.name, "llamafactory")
 
     def test_falls_back_to_mock_when_not_ready(self) -> None:
-        store = JobStore()
         import local_trainer.engine as engine_module
 
         original = engine_module.real_engine_ready
         engine_module.real_engine_ready = lambda: False
         try:
-            engine = build_engine(store, _FakeDatasetStore())
+            with tempfile.TemporaryDirectory() as temp_dir:
+                experiments, datasets = self._build_services(temp_dir)
+                engine = build_engine(experiments, datasets)
         finally:
             engine_module.real_engine_ready = original
 

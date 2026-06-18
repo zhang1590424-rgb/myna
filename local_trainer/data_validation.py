@@ -10,7 +10,7 @@ from typing import Any
 from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 
-from .domain import DatasetRecord
+from .domain import DatasetRecord, PreferenceRecord
 
 
 class DatasetValidationError(ValueError):
@@ -42,6 +42,28 @@ class ParsedDataset:
         return f"已识别 {self.valid_count} 条有效数据，格式没问题。"
 
 
+@dataclass(frozen=True)
+class ParsedPreferenceDataset:
+    records: list[PreferenceRecord]
+    skipped_count: int
+    warnings: list[str]
+    source_format: str
+
+    @property
+    def valid_count(self) -> int:
+        return len(self.records)
+
+    @property
+    def preview(self) -> list[PreferenceRecord]:
+        return self.records[:3]
+
+    @property
+    def human_summary(self) -> str:
+        if self.skipped_count:
+            return f"已识别 {self.valid_count} 组偏好对，跳过 {self.skipped_count} 行不完整内容。"
+        return f"已识别 {self.valid_count} 组偏好对，格式没问题。"
+
+
 HEADER_ALIASES = {
     "instruction": {
         "instruction",
@@ -71,21 +93,44 @@ HEADER_ALIASES = {
 }
 
 
-def parse_dataset_bytes(filename: str, content: bytes) -> ParsedDataset:
+PREFERENCE_ALIASES = {
+    "instruction": {
+        "instruction",
+        "prompt",
+        "question",
+        "query",
+        "问题",
+        "提问",
+        "用户问题",
+        "用户指令",
+        "输入",
+    },
+    "chosen": {"chosen", "good", "preferred", "better", "偏好回答", "更好回答", "采用", "好的回答", "正例"},
+    "rejected": {"rejected", "bad", "worse", "不想要", "差的回答", "拒绝", "负例", "更差回答"},
+}
+
+
+def _read_rows(filename: str, content: bytes) -> tuple[list[dict[str, Any]], str]:
     suffix = Path(filename).suffix.lower().lstrip(".")
     if suffix == "csv":
-        rows = _read_csv(content)
-        return _normalize_rows(rows, source_format="csv")
+        return _read_csv(content), "csv"
     if suffix == "json":
-        rows = _read_json(content)
-        return _normalize_rows(rows, source_format="json")
+        return _read_json(content), "json"
     if suffix == "jsonl":
-        rows = _read_jsonl(content)
-        return _normalize_rows(rows, source_format="jsonl")
+        return _read_jsonl(content), "jsonl"
     if suffix == "xlsx":
-        rows = _read_xlsx(content)
-        return _normalize_rows(rows, source_format="xlsx")
+        return _read_xlsx(content), "xlsx"
     raise DatasetValidationError("暂时只支持 CSV、JSON、JSONL 和 XLSX。请换一种格式再上传。")
+
+
+def parse_dataset_bytes(filename: str, content: bytes) -> ParsedDataset:
+    rows, source_format = _read_rows(filename, content)
+    return _normalize_rows(rows, source_format=source_format)
+
+
+def parse_preference_bytes(filename: str, content: bytes) -> ParsedPreferenceDataset:
+    rows, source_format = _read_rows(filename, content)
+    return _normalize_preference_rows(rows, source_format=source_format)
 
 
 def _decode_text(content: bytes) -> str:
@@ -265,15 +310,52 @@ def _normalize_rows(rows: list[dict[str, Any]], source_format: str) -> ParsedDat
 
 
 def _field_map(first_row: dict[str, Any]) -> dict[str, str]:
+    return _build_field_map(first_row, HEADER_ALIASES)
+
+
+def _build_field_map(first_row: dict[str, Any], aliases_table: dict[str, set[str]]) -> dict[str, str]:
     normalized_headers = {_normalize_header(header): header for header in first_row.keys()}
     result: dict[str, str] = {}
-    for canonical, aliases in HEADER_ALIASES.items():
+    for canonical, aliases in aliases_table.items():
         for alias in aliases:
             header = normalized_headers.get(_normalize_header(alias))
             if header is not None:
                 result[canonical] = header
                 break
     return result
+
+
+def _normalize_preference_rows(rows: list[dict[str, Any]], source_format: str) -> ParsedPreferenceDataset:
+    if not rows:
+        raise DatasetValidationError("文件里没有数据。请至少保留一组偏好对。")
+
+    warnings: list[str] = []
+    records: list[PreferenceRecord] = []
+    skipped_count = 0
+    field_map = _build_field_map(rows[0], PREFERENCE_ALIASES)
+
+    if "instruction" not in field_map or "chosen" not in field_map or "rejected" not in field_map:
+        raise DatasetValidationError(
+            "偏好数据需要三列：问题、偏好回答、不想要的回答。请使用 instruction,chosen,rejected。"
+        )
+
+    for index, row in enumerate(rows, start=2):
+        instruction = _clean_cell(row.get(field_map["instruction"], ""))
+        chosen = _clean_cell(row.get(field_map["chosen"], ""))
+        rejected = _clean_cell(row.get(field_map["rejected"], ""))
+        if not instruction or not chosen or not rejected:
+            skipped_count += 1
+            if len(warnings) < 5:
+                warnings.append(f"第 {index} 行缺少问题、偏好或拒绝回答，已跳过。")
+            continue
+
+        records.append(PreferenceRecord(instruction=instruction, chosen=chosen, rejected=rejected))
+
+    if not records:
+        raise DatasetValidationError("没有找到可训练的偏好对。请保留完整的三列内容。", warnings)
+    return ParsedPreferenceDataset(
+        records=records, skipped_count=skipped_count, warnings=warnings, source_format=source_format
+    )
 
 
 def _normalize_header(value: Any) -> str:

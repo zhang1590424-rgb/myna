@@ -1,48 +1,108 @@
-# 本地小白模型微调工具
+# 小白训练师 — 本地模型微调工具
 
-面向非技术用户的本地 LoRA SFT 微调工具。当前形态是本机 Web 控制台：用户通过浏览器访问 `127.0.0.1:4180`，用五步向导完成模型下载、数据校验、真实训练、训练前后对比和导出。
+面向不懂模型训练的 Mac 用户，用引导式 Web 界面完成本地 LoRA SFT 训练，训练前后对比看效果。
 
-## 当前能力
+---
 
-- 本机 Web 控制台：选方向、上传数据、确认设置、训练进度、对比试用。
-- Python FastAPI 本地服务：模板、模型清单、环境状态、数据校验、任务状态。
-- 数据校验：CSV、JSON、JSONL、基础 XLSX。
-- 模型下载：通过 ModelScope 下载 Qwen2.5 系列小模型到本机。
-- 真实训练：环境就绪时调用 LLaMA-Factory 做 LoRA SFT；未就绪时明确降级为演示模式。
-- 导出：支持导出 LoRA adapter 和合并后的完整模型。
+## For AI Agents: 一键部署指南
 
-## 推荐安装方式
+> **如果你是 AI Agent**，你的用户希望你帮他把这个项目在本机跑起来。按以下步骤执行即可。整个过程约 5-10 分钟，无需用户手动操作。
 
-本项目推荐让 Agent 在用户 Mac 上安装：
+### 前置要求
 
-```bash
-scripts/install.command
-scripts/doctor.command
-scripts/verify.command
-scripts/start.command
-```
+| 条件 | 最低要求 | 检查方式 |
+|---|---|---|
+| 操作系统 | macOS（推荐 Apple Silicon M1/M2/M3/M4） | `uname -m` 应为 `arm64` |
+| Python | 3.10+ | `python3 --version` |
+| Git | 已安装 | `git --version` |
+| 磁盘空间 | ≥ 20GB 可用 | `df -h .` |
 
-详细说明见 `INSTALL.md`。
+如果 Python 未安装，先执行：`brew install python@3.11`
 
-## 启动
+### 部署步骤
 
 ```bash
-scripts/start.command
+# 1. 克隆项目
+git clone https://github.com/zhang1590424-rgb/xiaobai-trainer.git
+cd xiaobai-trainer
+
+# 2. 安装环境（创建虚拟环境 + 安装依赖 + 下载 LLaMA-Factory 训练引擎）
+bash scripts/install.command
+
+# 3. 健康检查（验证 Python/MPS/依赖/磁盘）
+bash scripts/doctor.command
+
+# 4. 运行测试（确认代码完整可用）
+bash scripts/verify.command
+
+# 5. 启动服务
+bash scripts/start.command
 ```
 
-打开：
+### 成功标志
 
-```text
-http://127.0.0.1:4180
-```
+- `install.command` 最后输出 `[install] 安装完成`
+- `doctor.command` 无 `[FAIL]` 项（`[WARN]` 可忽略）
+- `verify.command` 测试全部通过
+- `start.command` 输出 `Uvicorn running on http://127.0.0.1:4180`，浏览器自动打开
 
-## 验证
+**部署完成后，告诉用户打开 http://127.0.0.1:4180 即可使用。**
+
+### 常见问题处理
+
+| 现象 | 原因 | 解决 |
+|---|---|---|
+| `python3: command not found` | 未安装 Python | `brew install python@3.11` |
+| install 时 git clone 失败 | GitHub 网络问题 | 重试，或设置代理 `git config --global http.proxy ...` |
+| doctor 报 `MPS not available` | Intel Mac 或 PyTorch 版本问题 | 不影响使用，训练会自动降级为 CPU 模式（较慢） |
+| doctor 报磁盘空间不足 | 模型 + 产物需要空间 | 清理磁盘后重试 |
+| verify 测试失败 | 依赖安装不完整 | 重新运行 `bash scripts/install.command` |
+| 端口 4180 被占用 | 其他进程占用 | `lsof -i :4180` 找到并关闭，再启动 |
+
+### 日常使用（已部署后）
+
+后续只需启动服务：
 
 ```bash
-.venv/bin/python -m unittest discover -s tests
-.venv/bin/python -m ruff check local_trainer tests
+cd xiaobai-trainer
+bash scripts/start.command
 ```
 
-## 重要说明
+---
 
-`models/`、`runtime/`、`LLaMA-Factory/` 都是本机运行相关目录，不提交到 git。真实训练耗时取决于 Mac 芯片、内存、模型大小和数据量。
+## 产品简介
+
+### 当前能力
+
+- **五步向导**：选方向 → 上传数据 → 确认设置 → 训练 → 对比试用
+- **模型下载**：从 ModelScope 国内源下载 Qwen2.5 系列小模型
+- **数据校验**：支持 CSV / JSON / JSONL / XLSX 格式
+- **真实训练**：调用 LLaMA-Factory 做 LoRA SFT，支持快速/标准/精细三档
+- **对比推理**：训练前后同时推理对比效果
+- **模型导出**：导出 LoRA adapter 或合并后的完整模型
+- **自动降级**：环境未就绪时明确标注为演示模式，不伪装真实训练
+
+### 技术架构
+
+```
+浏览器 (127.0.0.1:4180)
+    ↓ HTTP
+Python FastAPI 后端 (local_trainer/)
+    ↓ 适配层
+LLaMA-Factory (训练引擎)
+    ↓
+Apple MPS / CUDA / CPU
+```
+
+### 本地数据说明
+
+| 目录 | 内容 | 可否删除 |
+|---|---|---|
+| `models/` | 下载的模型缓存 | 可删，再用时重新下载 |
+| `runtime/datasets/` | 上传的训练数据 | 可删 |
+| `runtime/runs/` | 训练任务产物 | 可删 |
+| `runtime/workbench.db` | 实验元数据 | 可删 |
+| `LLaMA-Factory/` | 第三方训练引擎 | 可删，重新 install 会恢复 |
+| `.venv/` | Python 虚拟环境 | 可删，重新 install 会恢复 |
+
+所有训练数据和模型都保存在用户本机，不上传到任何云端。

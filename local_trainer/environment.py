@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from .domain import EnvironmentStatus, ModelStatus
-from .templates import get_model_catalog
+from .model_registry import get_model_catalog
 
 
 def collect_environment_status() -> EnvironmentStatus:
     llamafactory_ok = _can_import("llamafactory")
     torch_mps_ok = _torch_mps_available()
     models = [
-        ModelStatus(id=model.id, name=model.name, available=model.available, note=model.note)
+        ModelStatus(id=model.id, name=model.name, available=model.available, note=model.learning_value)
         for model in get_model_catalog()
     ]
 

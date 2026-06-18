@@ -1,185 +1,76 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>小白训练师</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>训练工作台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,350;14..32,400;14..32,450;14..32,500;14..32,560;14..32,600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <div class="app" aria-label="小白训练师">
-      <div class="workspace">
-        <nav class="rail" aria-label="训练步骤">
-          <div class="brand rail-brand">
-            <span class="brand-mark" aria-hidden="true">小</span>
-            <div>
-              <strong>小白训练师</strong>
-              <span>本机 Web 控制台</span>
-            </div>
+    <div class="app">
+      <!-- Sidebar -->
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <div class="sidebar-logo">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M4 6l4-3 4 3v5l-4 3-4-3V6z"/>
+            </svg>
           </div>
-          <div class="rail-logo">训练流程</div>
-          <button class="step" type="button" data-step="0"><span>0</span>准备环境</button>
-          <button class="step" type="button" data-step="1"><span>1</span>训练数据</button>
-          <button class="step" type="button" data-step="2"><span>2</span>确认设置</button>
-          <button class="step" type="button" data-step="3"><span>3</span>开始训练</button>
-          <button class="step" type="button" data-step="4"><span>4</span>试用对比</button>
-          <div class="rail-spacer"></div>
-          <p class="rail-note">数据、模型和训练产物都保存在这台 Mac。准备环境通过后再上传数据。</p>
+          <span class="sidebar-brand">训练工作台</span>
+        </div>
+
+        <nav class="nav-group" id="nav">
+          <button class="nav-item active" data-view="experiments">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+              <rect x="2.5" y="2.5" width="11" height="11" rx="2"/>
+              <path d="M5.5 6h5M5.5 8.5h3.5"/>
+            </svg>
+            <span class="nav-label">实验</span>
+            <span class="nav-badge" id="navBadgeExperiments"></span>
+          </button>
+          <button class="nav-item" data-view="models">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+              <circle cx="8" cy="8" r="5"/>
+              <path d="M8 5.5v3l2 1.5"/>
+            </svg>
+            <span class="nav-label">模型</span>
+            <span class="nav-badge" id="navBadgeModels"></span>
+          </button>
+          <button class="nav-item" data-view="datasets">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+              <rect x="3" y="3" width="10" height="10" rx="1.5"/>
+              <path d="M3 6.5h10M6.5 3v10"/>
+            </svg>
+            <span class="nav-label">数据</span>
+            <span class="nav-badge" id="navBadgeDatasets"></span>
+          </button>
+          <button class="nav-item" data-view="lab">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+              <path d="M8 3L3 6v4.5l5 3 5-3V6L8 3z"/>
+              <path d="M8 9v3.5M3 6l5 3 5-3"/>
+            </svg>
+            <span class="nav-label">实验室</span>
+          </button>
         </nav>
 
-        <main class="main">
-          <div class="content">
-            <section class="panel" data-panel="0">
-              <p class="eyebrow">第 0 步 / 共 4 步</p>
-              <h1>先把训练环境准备好</h1>
-              <p class="lede" id="environmentMessage">正在连接本地服务。</p>
-              <section class="environment-block">
-                <div class="section-head">
-                  <div>
-                    <h2>依赖检测</h2>
-                    <p>缺组件时先按提示修复，模型型号在本地基础模型里选择。</p>
-                  </div>
-                  <button class="btn btn-quiet btn-small" type="button" id="refreshEnvironmentButton">重新检测</button>
-                </div>
-                <div class="progress-track" aria-label="环境准备进度">
-                  <i id="environmentProgress"></i>
-                </div>
-                <div class="dependency-list" id="environmentChecklist"></div>
-                <p class="inline-status" id="environmentStatus"></p>
-              </section>
-            </section>
-
-            <section class="panel" data-panel="1">
-              <p class="eyebrow">第 1 步 / 共 4 步</p>
-              <h1>把你的数据喂给它</h1>
-              <p class="lede">先选数据更像哪一类，再上传文件。这个选择只影响示例、提示词和训练后的默认对比问题。</p>
-              <div class="type-panel">
-                <div class="section-head">
-                  <div>
-                    <h2>你的数据主要是哪类？</h2>
-                    <p id="templateHelp">不确定就先用客服问答，后面仍然可以换。</p>
-                  </div>
-                </div>
-                <div class="template-grid template-grid-compact" id="templateGrid"></div>
-              </div>
-              <input id="fileInput" type="file" accept=".csv,.json,.jsonl,.xlsx" hidden />
-              <button class="dropzone" type="button" id="dropzone">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M12 3v12" />
-                  <path d="m17 8-5-5-5 5" />
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                </svg>
-                <strong>把文件拖到这里，或点击选择</strong>
-                <span id="datasetHint">表头可以用 question,answer，也可以用 问题,回答。</span>
-              </button>
-              <div class="file-card" id="datasetCard" hidden></div>
-              <p class="inline-status" id="datasetStatus"></p>
-              <a class="sample-link" id="sampleLink" href="/api/sample-data/customer_service">
-                下载示例数据
-              </a>
-            </section>
-
-            <section class="panel" data-panel="2">
-              <p class="eyebrow">第 2 步 / 共 4 步</p>
-              <h1>确认一下就开始</h1>
-              <p class="lede">这些设置已经按你的方向预填。第一次训练建议不要改高级参数。</p>
-              <div class="summary" id="trainingSummary"></div>
-              <div class="preset-row" id="presetRow"></div>
-              <details class="details">
-                <summary>
-                  <span>高级设置，可以不用管</span>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="m9 18 6-6-6-6" />
-                  </svg>
-                </summary>
-                <div class="settings-grid">
-                  <label>
-                    <span>训练轮数</span>
-                    <input id="epochsInput" type="number" min="1" max="10" value="3" />
-                    <small>同一批数据学几遍。调大更明显但更慢，太大可能死记硬背。</small>
-                  </label>
-                  <label>
-                    <span>学习率</span>
-                    <input id="learningRateInput" type="number" min="0.00001" max="0.01" step="0.00001" value="0.0002" />
-                    <small>每一步改动幅度。调大更快但可能学歪，调小更稳但慢。</small>
-                  </label>
-                  <label>
-                    <span>LoRA 秩</span>
-                    <input id="rankInput" type="number" min="1" max="64" value="8" />
-                    <small>这次训练的可学习容量。调大能记更多风格，也更耗资源。</small>
-                  </label>
-                  <label>
-                    <span>批大小</span>
-                    <input id="batchInput" type="number" min="1" max="16" value="2" />
-                    <small>每次同时看几条数据。Mac 上建议保持 2，调大可能内存不够。</small>
-                  </label>
-                </div>
-              </details>
-              <p class="inline-status" id="confirmStatus"></p>
-            </section>
-
-            <section class="panel" data-panel="3">
-              <p class="eyebrow">第 3 步 / 共 4 步</p>
-              <h1>正在训练你的 AI</h1>
-              <p class="lede">现在可以离开去做别的事。完成后回来对比同一句话的变化。</p>
-              <div class="training-panel">
-                <strong id="jobPercent">0%</strong>
-                <span id="jobMessage">等待开始</span>
-                <div class="progress-track">
-                  <i id="jobProgress"></i>
-                </div>
-                <div class="fact-row" id="jobFacts"></div>
-              </div>
-              <details class="details metric-details">
-                <summary>
-                  <span>查看专业指标 loss 曲线</span>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="m9 18 6-6-6-6" />
-                  </svg>
-                </summary>
-                <svg class="loss-chart" viewBox="0 0 420 140" preserveAspectRatio="none" aria-label="loss 曲线">
-                  <polyline id="lossLine" points="" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-                <div class="loss-stats" id="lossStats" aria-live="polite"></div>
-                <p class="metric-copy">loss 整体下降代表训练在贴近这批数据，最终效果还是看试用对比。</p>
-              </details>
-              <button class="btn btn-quiet stop-btn" type="button" id="stopButton">停止训练</button>
-            </section>
-
-            <section class="panel" data-panel="4">
-              <p class="eyebrow">第 4 步 / 共 4 步</p>
-              <div class="done-banner">训练完成，试试看它学到了什么</div>
-              <h1>同一个问题，看前后差别</h1>
-              <p class="lede">左边是训练前，右边是训练后的风格变化。环境未就绪时会明确标注演示模式，真实训练会加载本机模型对比。</p>
-              <div class="compare-grid">
-                <article class="answer-box">
-                  <header>训练前</header>
-                  <p id="beforeAnswer">等待输入。</p>
-                </article>
-                <article class="answer-box answer-box-strong">
-                  <header>训练后</header>
-                  <p id="afterAnswer">等待输入。</p>
-                </article>
-              </div>
-              <div class="ask-row">
-                <input id="compareInput" type="text" value="顾客问怎么退货，怎么回？" />
-                <button class="btn btn-primary" type="button" id="compareButton">对比回答</button>
-              </div>
-              <p class="inline-status" id="compareStatus"></p>
-            </section>
+        <div class="sidebar-footer">
+          <div class="queue-status" id="queuePill">
+            <span class="queue-dot" id="queueDot"></span>
+            <span id="queueText">队列空闲</span>
           </div>
+        </div>
+      </aside>
 
-          <footer class="actionbar">
-            <button class="btn btn-ghost" type="button" id="backButton">上一步</button>
-            <div class="action-group">
-              <button class="btn btn-quiet" type="button" id="exportMergeButton" hidden>导出完整模型</button>
-              <button class="btn btn-quiet" type="button" id="exportButton" hidden>导出 LoRA</button>
-              <button class="btn btn-primary" type="button" id="nextButton">下一步</button>
-            </div>
-          </footer>
-        </main>
-      </div>
+      <!-- Main content -->
+      <main class="main" id="canvas">
+        <!-- views render here -->
+      </main>
     </div>
+
+    <div class="toast" id="toast" hidden></div>
 
     <script src="/static/app.js"></script>
   </body>

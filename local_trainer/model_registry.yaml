@@ -1,0 +1,28 @@
+# 工作台底座模型清单。新增模型只需在这里加一项，不用改代码。
+# lf_template: LLaMA-Factory 的对话模板名（不同架构不同）。
+# repo_id: ModelScope 仓库 ID，用于下载。
+models:
+  - id: qwen3.5-0.8b
+    name: Qwen3.5-0.8B
+    parameter_count: 0.8B
+    learning_value: 试错成本最低的草稿纸，验证数据和参数想法
+    lf_template: qwen3_5_nothink
+    repo_id: Qwen/Qwen3.5-0.8B
+    download_size_label: 约 2 GB
+    recommended: true
+
+  - id: qwen3.5-2b
+    name: Qwen3.5-2B
+    parameter_count: 2B
+    learning_value: 效果与速度平衡的日常主力，16GB Mac 最佳性价比
+    lf_template: qwen3_5_nothink
+    repo_id: Qwen/Qwen3.5-2B
+    download_size_label: 约 4 GB
+
+  - id: gemma-2-2b-it
+    name: Gemma-2-2B-it
+    parameter_count: 2B
+    learning_value: 不同架构（Google 系），横向对比同数据不同底座
+    lf_template: gemma
+    repo_id: LLM-Research/gemma-2-2b-it
+    download_size_label: 约 5 GB

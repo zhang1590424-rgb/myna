@@ -6,34 +6,30 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class TrainingDefaults(BaseModel):
-    epochs: int = 3
-    learning_rate: float = 0.0002
-    lora_rank: int = 8
-    batch_size: int = 2
-
-
+# --------------------------------------------------------------------------- #
+# Sample data (starter datasets the user can download)
+# --------------------------------------------------------------------------- #
 class TemplatePreset(BaseModel):
     id: str
     title: str
     description: str
-    goal_label: str
     sample_filename: str
     starter_prompt: str
-    system_prompt: str
-    defaults: TrainingDefaults = Field(default_factory=TrainingDefaults)
     sample_rows: list[dict[str, str]] = Field(default_factory=list)
 
 
+# --------------------------------------------------------------------------- #
+# Models
+# --------------------------------------------------------------------------- #
 class ModelOption(BaseModel):
     id: str
     name: str
-    size_label: str
     parameter_count: str
+    learning_value: str
+    lf_template: str
     local_path: str | None = None
     available: bool = False
     recommended: bool = False
-    note: str
     repo_id: str | None = None
     download_size_label: str | None = None
 
@@ -60,32 +56,67 @@ class EnvironmentStatus(BaseModel):
     model_status: list[ModelStatus]
     progress: int
     message: str
+    engine: str = "mock"
+    engine_label: str = "演示模式"
+
+
+# --------------------------------------------------------------------------- #
+# Datasets
+# --------------------------------------------------------------------------- #
+DatasetFormat = Literal["alpaca", "dpo_pairs"]
 
 
 class DatasetRecord(BaseModel):
+    """Supervised (SFT) row."""
+
     instruction: str
     output: str
     input: str = ""
     system: str | None = None
 
 
+class PreferenceRecord(BaseModel):
+    """Preference (DPO) row."""
+
+    instruction: str
+    chosen: str
+    rejected: str
+
+
+class DatasetInfo(BaseModel):
+    id: str
+    name: str
+    source_filename: str
+    format: DatasetFormat
+    row_count: int
+    created_at: str
+
+
 class DatasetUploadResult(BaseModel):
     dataset_id: str
+    name: str
     filename: str
     source_format: Literal["csv", "json", "jsonl", "xlsx"]
-    training_format: Literal["alpaca"] = "alpaca"
+    format: DatasetFormat
     valid_count: int
     skipped_count: int
     warnings: list[str] = Field(default_factory=list)
-    preview: list[DatasetRecord] = Field(default_factory=list)
+    preview: list[dict[str, str]] = Field(default_factory=list)
     human_summary: str
 
 
-class TrainingSettings(BaseModel):
+# --------------------------------------------------------------------------- #
+# Experiments
+# --------------------------------------------------------------------------- #
+TrainingMethod = Literal["sft", "dpo"]
+
+
+class ExperimentParams(BaseModel):
     epochs: int = Field(default=3, ge=1, le=10)
     learning_rate: float = Field(default=0.0002, gt=0, le=0.01)
     lora_rank: int = Field(default=8, ge=1, le=64)
     batch_size: int = Field(default=2, ge=1, le=16)
+    beta: float = Field(default=0.1, gt=0, le=1.0)  # DPO preference strength
 
 
 class TrainingPreset(BaseModel):
@@ -93,18 +124,12 @@ class TrainingPreset(BaseModel):
     title: str
     description: str
     recommended: bool = False
-    settings: TrainingSettings
+    params: ExperimentParams
 
 
-class CreateTrainingJobRequest(BaseModel):
-    template_id: str
-    dataset_id: str
-    model_id: str
-    settings: TrainingSettings = Field(default_factory=TrainingSettings)
-
-
-class JobStatus(str, Enum):
+class ExperimentStatus(str, Enum):
     pending = "pending"
+    queued = "queued"
     running = "running"
     stopping = "stopping"
     stopped = "stopped"
@@ -112,37 +137,116 @@ class JobStatus(str, Enum):
     failed = "failed"
 
 
-class TrainingJob(BaseModel):
+class Experiment(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
     id: str
-    template_id: str
-    dataset_id: str
+    name: str
+    method: TrainingMethod = "sft"
     model_id: str
-    dataset_count: int
-    settings: TrainingSettings
-    status: JobStatus = JobStatus.pending
+    dataset_id: str
+    dataset_count: int = 0
+    params: ExperimentParams = Field(default_factory=ExperimentParams)
+    status: ExperimentStatus = ExperimentStatus.pending
     progress: int = 0
     message: str = "等待开始"
-    learned_count: int = 0
     loss: list[float] = Field(default_factory=list)
+    eta: str | None = None
     output_dir: str | None = None
+    run_dir: str | None = None
+    pid: int | None = None
     error: str | None = None
     engine: str = "mock"
-    pid: int | None = None
-    run_dir: str | None = None
-    eta: str | None = None
+    cloned_from: str | None = None
+    notes: str = ""
+    tags: list[str] = Field(default_factory=list)
+    metrics: dict[str, float] = Field(default_factory=dict)
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
 
 
-class CompareRequest(BaseModel):
-    job_id: str
+class CreateExperimentRequest(BaseModel):
+    model_id: str
+    dataset_id: str
+    method: TrainingMethod = "sft"
+    params: ExperimentParams = Field(default_factory=ExperimentParams)
+    name: str | None = None
+    cloned_from: str | None = None
+
+
+class BatchVariableRequest(BaseModel):
+    """Create N experiments that differ on one parameter."""
+
+    model_id: str
+    dataset_id: str
+    method: TrainingMethod = "sft"
+    base_params: ExperimentParams = Field(default_factory=ExperimentParams)
+    variable: Literal["epochs", "learning_rate", "lora_rank", "batch_size", "beta"]
+    values: list[float]
+    name_prefix: str | None = None
+
+
+class UpdateExperimentRequest(BaseModel):
+    name: str | None = None
+    notes: str | None = None
+    tags: list[str] | None = None
+
+
+# --------------------------------------------------------------------------- #
+# Lab (chat verification) + compare
+# --------------------------------------------------------------------------- #
+class LabLoadRequest(BaseModel):
+    experiment_id: str
+    use_adapter: bool = True
+
+
+class LabChatRequest(BaseModel):
+    prompt: str
+    max_new_tokens: int = 120
+
+
+class LabChatResponse(BaseModel):
+    prompt: str
+    answer: str
+
+
+class LabStatus(BaseModel):
+    loaded: bool = False
+    experiment_id: str | None = None
+    experiment_name: str | None = None
+    use_adapter: bool = True
+    message: str = "未加载任何模型。"
+
+
+class ComparePromptRequest(BaseModel):
+    experiment_ids: list[str]
     prompt: str
 
 
-class CompareResponse(BaseModel):
+class LabCompareChatRequest(BaseModel):
     prompt: str
-    before: str
-    after: str
+    max_new_tokens: int = 120
+
+
+class LabCompareChatResponse(BaseModel):
+    prompt: str
+    base_answer: str
+    finetuned_answer: str
+
+
+class LabBatchTestRequest(BaseModel):
+    prompts: list[str] = Field(default_factory=list)
+    max_new_tokens: int = 120
+
+
+class LabBatchTestItem(BaseModel):
+    prompt: str
+    base_answer: str
+    finetuned_answer: str
+
+
+class LabBatchTestResponse(BaseModel):
+    experiment_id: str
+    experiment_name: str
+    results: list[LabBatchTestItem]

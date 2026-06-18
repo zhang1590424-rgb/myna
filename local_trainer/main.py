@@ -4,36 +4,59 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from .compare import build_comparison
 from .data_validation import DatasetValidationError
-from .domain import CompareRequest, CreateTrainingJobRequest
-from .downloader import ModelDownloader
-from .engine import JobStore, build_engine
-from .environment import collect_environment_status
-from .llamafactory import LlamaFactoryConfigBuilder
-from .paths import WEB_DIR, ensure_runtime_dirs
-from .store import DatasetStore
-from .templates import (
-    get_model,
-    get_model_catalog,
-    get_template,
-    get_templates,
-    get_training_presets,
-    sample_csv_for_template,
+from .dataset_manager import DatasetManager
+from .domain import (
+    BatchVariableRequest,
+    CreateExperimentRequest,
+    DatasetFormat,
+    LabBatchTestRequest,
+    LabChatRequest,
+    LabCompareChatRequest,
+    LabLoadRequest,
+    UpdateExperimentRequest,
 )
+from .downloader import ModelDownloader
+from .engine import build_engine
+from .environment import collect_environment_status
+from .experiment_service import ExperimentService
+from .inference_engine import InferenceEngine
+from .model_registry import get_model, get_model_catalog
+from .paths import WEB_DIR, ensure_runtime_dirs
+from .persistence import Database
+from .queue_manager import QueueManager
+from .templates import get_template, get_templates, get_training_presets, sample_csv_for_template
 
 
 ensure_runtime_dirs()
 
-app = FastAPI(title="小白训练师本地服务")
+app = FastAPI(title="个人训练工作台本地服务")
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
-dataset_store = DatasetStore()
-job_store = JobStore()
-training_engine = build_engine(job_store, dataset_store)
-config_builder = LlamaFactoryConfigBuilder()
+db = Database()
+datasets = DatasetManager(db)
+experiments = ExperimentService(db, datasets)
+training_engine = build_engine(experiments, datasets)
+queue = QueueManager(experiments, training_engine)
+lab = InferenceEngine(experiments)
 model_downloader = ModelDownloader()
 
 
+@app.on_event("startup")
+async def _startup() -> None:
+    queue.start()
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    await queue.shutdown()
+    db.close()
+
+
+# --------------------------------------------------------------------------- #
+# Static + meta
+# --------------------------------------------------------------------------- #
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(WEB_DIR / "index.html")
@@ -58,14 +81,31 @@ def templates():
     return get_templates()
 
 
-@app.get("/api/models")
-def models():
-    return get_model_catalog()
-
-
 @app.get("/api/training-presets")
 def training_presets():
     return get_training_presets()
+
+
+@app.get("/api/sample-data/{template_id}")
+def sample_data(template_id: str) -> Response:
+    try:
+        template = get_template(template_id)
+        csv_text = sample_csv_for_template(template_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个示例模板。") from exc
+    return Response(
+        content=csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{template.sample_filename}"'},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Models
+# --------------------------------------------------------------------------- #
+@app.get("/api/models")
+def models():
+    return get_model_catalog()
 
 
 @app.post("/api/models/{model_id}/download")
@@ -90,129 +130,259 @@ def download_status(model_id: str):
     return model_downloader.status_for(model_id)
 
 
-@app.get("/api/sample-data/{template_id}")
-def sample_data(template_id: str) -> Response:
-    try:
-        template = get_template(template_id)
-        csv_text = sample_csv_for_template(template_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="没有找到这个模板。") from exc
-
-    return Response(
-        content=csv_text,
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{template.sample_filename}"'},
-    )
+# --------------------------------------------------------------------------- #
+# Datasets
+# --------------------------------------------------------------------------- #
+@app.get("/api/datasets")
+def list_datasets():
+    return datasets.list_datasets()
 
 
-@app.post("/api/datasets/validate")
-async def validate_dataset(
-    template_id: str = Form(...),
+@app.post("/api/datasets")
+async def upload_dataset(
     file: UploadFile = File(...),
+    format: DatasetFormat = Form("alpaca"),
+    name: str | None = Form(None),
 ):
     content = await file.read()
     filename = file.filename or "dataset"
     try:
-        get_template(template_id)
-        return dataset_store.save_upload(filename=filename, content=content, template_id=template_id)
+        return datasets.save_upload(filename=filename, content=content, fmt=format, name=name)
     except DatasetValidationError as exc:
         raise HTTPException(status_code=400, detail={"message": exc.message, "warnings": exc.warnings}) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="没有找到这个模板。") from exc
 
 
-@app.post("/api/training/jobs")
-async def create_training_job(request: CreateTrainingJobRequest):
+@app.get("/api/datasets/{dataset_id}")
+def get_dataset(dataset_id: str):
     try:
-        get_template(request.template_id)
-        model = get_model(request.model_id)
-        metadata = dataset_store.read_metadata(request.dataset_id)
+        info = datasets.get_info(dataset_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="模板、模型或数据不存在。") from exc
+        raise HTTPException(status_code=404, detail="没有找到这个数据集。") from exc
+    if info.format == "dpo_pairs":
+        preview = [record.model_dump() for record in datasets.read_preferences(dataset_id)[:5]]
+    else:
+        preview = [record.model_dump() for record in datasets.read_records(dataset_id)[:5]]
+    return {"info": info.model_dump(), "preview": preview}
 
+
+@app.delete("/api/datasets/{dataset_id}")
+def delete_dataset(dataset_id: str):
+    if not datasets.delete(dataset_id):
+        raise HTTPException(status_code=404, detail="没有找到这个数据集。")
+    return {"deleted": dataset_id}
+
+
+# --------------------------------------------------------------------------- #
+# Experiments
+# --------------------------------------------------------------------------- #
+@app.get("/api/experiments")
+def list_experiments():
+    return experiments.list()
+
+
+@app.post("/api/experiments")
+async def create_experiment(request: CreateExperimentRequest):
+    _validate_experiment_inputs(request.model_id, request.dataset_id, request.method)
+    exp = experiments.create(request)
+    queue.enqueue(exp.id)
+    return experiments.get(exp.id)
+
+
+@app.post("/api/experiments/batch")
+async def batch_create_experiments(request: BatchVariableRequest):
+    _validate_experiment_inputs(request.model_id, request.dataset_id, request.method)
+    if not request.values:
+        raise HTTPException(status_code=400, detail="请至少给变量一个取值。")
+    created = experiments.batch_create(request)
+    for exp in created:
+        queue.enqueue(exp.id)
+    return [experiments.get(exp.id) for exp in created]
+
+
+@app.get("/api/experiments/compare")
+def compare_experiments(ids: str):
+    id_list = [i for i in ids.split(",") if i]
+    try:
+        return build_comparison(experiments, id_list)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有可对比的实验。") from exc
+
+
+@app.get("/api/experiments/{exp_id}")
+def get_experiment(exp_id: str):
+    try:
+        return experiments.get(exp_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
+
+
+@app.patch("/api/experiments/{exp_id}")
+def update_experiment(exp_id: str, request: UpdateExperimentRequest):
+    try:
+        return experiments.update(exp_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
+
+
+@app.post("/api/experiments/{exp_id}/clone")
+async def clone_experiment(exp_id: str):
+    try:
+        clone = experiments.clone(exp_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
+    return clone
+
+
+@app.post("/api/experiments/{exp_id}/stop")
+async def stop_experiment(exp_id: str):
+    try:
+        return await training_engine.stop(exp_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
+
+
+@app.delete("/api/experiments/{exp_id}")
+def delete_experiment(exp_id: str):
+    if not experiments.delete(exp_id):
+        raise HTTPException(status_code=404, detail="没有找到这个实验。")
+    return {"deleted": exp_id}
+
+
+@app.get("/api/experiments/{exp_id}/export")
+async def export_experiment(exp_id: str, merge: bool = False) -> FileResponse:
+    try:
+        result = await training_engine.export(exp_id, merge=merge)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return FileResponse(path=result.path, media_type=result.media_type, filename=result.filename)
+
+
+# --------------------------------------------------------------------------- #
+# Queue
+# --------------------------------------------------------------------------- #
+@app.get("/api/queue")
+def queue_status():
+    return queue.status()
+
+
+@app.post("/api/queue/pause")
+def pause_queue():
+    queue.pause()
+    return queue.status()
+
+
+@app.post("/api/queue/resume")
+def resume_queue():
+    queue.resume()
+    return queue.status()
+
+
+# --------------------------------------------------------------------------- #
+# Lab
+# --------------------------------------------------------------------------- #
+@app.get("/api/lab/status")
+def lab_status():
+    return lab.status()
+
+
+@app.post("/api/lab/load")
+def lab_load(request: LabLoadRequest):
+    try:
+        return lab.load(request.experiment_id, request.use_adapter)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/lab/unload")
+def lab_unload():
+    return lab.unload()
+
+
+@app.post("/api/lab/chat")
+async def lab_chat(request: LabChatRequest):
+    try:
+        answer = await lab.chat(request.prompt, request.max_new_tokens)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"prompt": request.prompt, "answer": answer}
+
+
+@app.post("/api/lab/compare-chat")
+async def lab_compare_chat(request: LabCompareChatRequest):
+    try:
+        result = await lab.compare_chat(request.prompt, request.max_new_tokens)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return result
+
+
+@app.post("/api/lab/batch-test")
+async def lab_batch_test(request: LabBatchTestRequest):
+    try:
+        status = lab.status()
+        if not status.loaded or not lab._experiment_id:
+            raise RuntimeError("请先加载一个实验。")
+        exp = experiments.get(lab._experiment_id)
+
+        # 如果用户没传 prompts，从训练数据集里取前 5 条问题
+        prompts = request.prompts
+        if not prompts:
+            try:
+                records = datasets._read_rows(exp.dataset_id)
+                prompts = [
+                    r.get("instruction", r.get("query", ""))
+                    for r in records[:5]
+                    if r.get("instruction") or r.get("query")
+                ]
+            except Exception:
+                pass
+            if not prompts:
+                prompts = ["你好，请介绍一下你自己。"]
+
+        results = []
+        for prompt in prompts:
+            result = await lab.compare_chat(prompt, request.max_new_tokens)
+            results.append(result)
+
+        return {
+            "experiment_id": exp.id,
+            "experiment_name": exp.name,
+            "results": results,
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+def _validate_experiment_inputs(model_id: str, dataset_id: str, method: str) -> None:
+    try:
+        model = get_model(model_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个模型。") from exc
     if not model.available:
-        raise HTTPException(status_code=409, detail="这个模型还没准备好，请先在准备环境页下载它。")
+        raise HTTPException(status_code=409, detail="这个模型还没准备好，请先在模型页下载它。")
 
-    valid_count = int(metadata["valid_count"])
-    if valid_count < 3:
-        raise HTTPException(
-            status_code=400,
-            detail="有效数据太少了（至少要 3 条）。再补一些问答数据，训练效果才稳。",
-        )
-
-    job = await job_store.create(
-        template_id=request.template_id,
-        dataset_id=request.dataset_id,
-        model_id=request.model_id,
-        dataset_count=valid_count,
-        settings=request.settings,
-        engine=training_engine.name,
-    )
-    await training_engine.start(job)
-    return job
-
-
-@app.get("/api/training/jobs")
-async def list_training_jobs():
-    return await job_store.list()
-
-
-@app.get("/api/training/jobs/{job_id}")
-async def get_training_job(job_id: str):
     try:
-        return await job_store.get(job_id)
+        info = datasets.get_info(dataset_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="没有找到这个训练任务。") from exc
+        raise HTTPException(status_code=404, detail="没有找到这个数据集。") from exc
 
-
-@app.post("/api/training/jobs/{job_id}/stop")
-async def stop_training_job(job_id: str):
-    try:
-        return await training_engine.stop(job_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="没有找到这个训练任务。") from exc
-
-
-@app.post("/api/compare")
-async def compare(request: CompareRequest):
-    try:
-        return await training_engine.compare(request.job_id, request.prompt)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="没有找到这个训练任务。") from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@app.get("/api/training/jobs/{job_id}/export")
-async def export_training_job(job_id: str, merge: bool = False) -> FileResponse:
-    try:
-        result = await training_engine.export(job_id, merge=merge)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="没有找到这个训练任务。") from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    return FileResponse(
-        path=result.path,
-        media_type=result.media_type,
-        filename=result.filename,
-    )
-
-
-@app.post("/api/training/jobs/{job_id}/llamafactory-preview")
-async def preview_llamafactory_config(job_id: str):
-    try:
-        job = await job_store.get(job_id)
-        records = dataset_store.read_records(job.dataset_id)
-        template = get_template(job.template_id)
-        model = get_model(job.model_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="训练任务、数据、模板或模型不存在。") from exc
-
-    prepared = config_builder.prepare(job=job, records=records, template=template, model=model)
-    return {
-        "config_file": str(prepared.config_file),
-        "dataset_file": str(prepared.dataset_file),
-        "dataset_info_file": str(prepared.dataset_info_file),
-        "command": prepared.command,
-    }
+    expected = "dpo_pairs" if method == "dpo" else "alpaca"
+    if info.format != expected:
+        if method == "dpo":
+            raise HTTPException(status_code=400, detail="DPO 需要偏好数据（chosen/rejected），这份是问答数据。")
+        raise HTTPException(status_code=400, detail="SFT 需要问答数据，这份是偏好数据。")
+    if info.row_count < 3:
+        raise HTTPException(status_code=400, detail="有效数据太少了（至少 3 条），再补一些训练才稳。")
