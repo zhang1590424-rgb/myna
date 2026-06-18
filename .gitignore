@@ -16,6 +16,4 @@ screenlog.*
 
 # 仅维护者/开发用文档，不分发到 GitHub（本地保留）
 AGENTS.md
-PRODUCT.md
 DESIGN.md
-INSTALL.md
