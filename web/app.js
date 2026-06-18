@@ -25,7 +25,6 @@ const compareButton = document.querySelector("#compareButton");
 const compareInput = document.querySelector("#compareInput");
 const fileInput = document.querySelector("#fileInput");
 const dropzone = document.querySelector("#dropzone");
-const localAddress = document.querySelector(".local-address");
 const refreshEnvironmentButton = document.querySelector("#refreshEnvironmentButton");
 
 async function api(path, options = {}) {
@@ -56,9 +55,6 @@ function hasUsableModel() {
 }
 
 async function init() {
-  if (localAddress) {
-    localAddress.textContent = window.location.host || "127.0.0.1:4180";
-  }
   const [environment, templates, models, presets] = await Promise.all([
     api("/api/environment"),
     api("/api/templates"),
@@ -220,8 +216,6 @@ function renderEnvironment(environment) {
   state.environment = environment;
   document.querySelector("#environmentMessage").textContent = environment.message;
   document.querySelector("#environmentProgress").style.width = `${environment.progress}%`;
-  document.querySelector("#enginePill").textContent =
-    environment.engine === "llamafactory" ? "真实训练已就绪" : "演示模式";
   const modelReady = environment.model_status.some((item) => item.available);
   document.querySelector("#environmentChecklist").innerHTML = [
     dependencyItem({
@@ -252,7 +246,7 @@ function renderEnvironment(environment) {
       detail: modelReady ? "已有可用模型，可以继续上传数据。" : "请选择一个模型下载，第一次建议 0.5B。",
       action: "",
       command: "",
-      extra: '<div class="model-options" id="modelGrid"></div>',
+      extra: modelDisclosure(),
     }),
   ].join("");
   document.querySelectorAll("[data-copy-command]").forEach((button) => {
@@ -263,6 +257,23 @@ function renderEnvironment(environment) {
     modelReady ? "环境检查完成。模型和数据都只保存在本机。" : "还没有可用模型，请先在本地基础模型里下载一个。",
     !modelReady,
   );
+}
+
+function modelDisclosure() {
+  const model = activeModel();
+  const label = model?.available ? `当前使用：${model.name}` : "展开选择或下载模型";
+  return `
+    <details class="model-disclosure">
+      <summary>
+        <span>模型型号</span>
+        <strong id="modelSelectionSummary">${label}</strong>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="m9 18 6-6-6-6" />
+        </svg>
+      </summary>
+      <div class="model-options" id="modelGrid"></div>
+    </details>
+  `;
 }
 
 function dependencyItem({ title, ok, optional = false, detail, action, command, extra = "" }) {
@@ -347,6 +358,11 @@ function renderModels() {
   const grid = document.querySelector("#modelGrid");
   if (!grid) {
     return;
+  }
+  const summary = document.querySelector("#modelSelectionSummary");
+  const selectedModel = activeModel();
+  if (summary) {
+    summary.textContent = selectedModel?.available ? `当前使用：${selectedModel.name}` : "展开选择或下载模型";
   }
   grid.innerHTML = state.models
     .map((model) => {
