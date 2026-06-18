@@ -39,6 +39,7 @@ class ModelDownloadStatus(BaseModel):
     state: Literal["idle", "downloading", "completed", "failed"] = "idle"
     progress: int = 0
     message: str = ""
+    speed: str = ""
     error: str | None = None
 
 

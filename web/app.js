@@ -1227,8 +1227,10 @@ function attachProgress(model, actions, initial) {
     el("span", { style: `width:${initial}%` }),
   ]);
   const pct = el("span", { class: "muted tnum" }, `${initial}%`);
+  const speed = el("span", { class: "muted dl-speed" }, "");
   actions.appendChild(prog);
   actions.appendChild(pct);
+  actions.appendChild(speed);
 
   clearInterval(state.downloadTimers[model.id]);
   state.downloadTimers[model.id] = setInterval(async () => {
@@ -1236,6 +1238,7 @@ function attachProgress(model, actions, initial) {
       const s = await api(`/api/models/${model.id}/download`);
       prog.firstChild.style.width = `${s.progress || 0}%`;
       pct.textContent = `${s.progress || 0}%`;
+      speed.textContent = s.speed ? `· ${s.speed}` : "";
       if (s.state === "completed") {
         clearInterval(state.downloadTimers[model.id]);
         toast(`${model.name} 下载完成。`);

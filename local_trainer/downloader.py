@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import sys
+import time
 
 from .domain import ModelDownloadStatus
 from .paths import MODELS_DIR, model_dir_for_repo
@@ -176,6 +177,16 @@ class ModelDownloader:
                     continue
         return total
 
+    @staticmethod
+    def _format_speed(bytes_per_sec: float) -> str:
+        """把字节/秒格式化成人类可读速率；负值或极小值归零。"""
+        v = max(bytes_per_sec, 0)
+        if v < 1024:
+            return f"{v:.0f} B/s"
+        if v < 1024**2:
+            return f"{v / 1024:.0f} KB/s"
+        return f"{v / 1024**2:.1f} MB/s"
+
     async def _watch_progress(
         self,
         model_id: str,
@@ -192,8 +203,14 @@ class ModelDownloader:
             # 同时起一个协程持续排空 stderr，防止 pipe 写满阻塞子进程。
             drain = asyncio.create_task(self._drain_stderr(stderr, stderr_tail))
             last_pct = 1
+            last_done = 0
+            last_t = time.monotonic()
             while proc.returncode is None:
                 done = await asyncio.to_thread(self._downloaded_bytes, repo_id)
+                now = time.monotonic()
+                # 速率 = 本轮新增字节 / 间隔；掉到 0 用户即可判断是网络问题。
+                speed = self._format_speed((done - last_done) / max(now - last_t, 1e-6))
+                last_done, last_t = done, now
                 pct = int(done * 100 / total_bytes)
                 pct = max(last_pct, min(pct, 99))
                 last_pct = pct
@@ -202,6 +219,7 @@ class ModelDownloader:
                     state="downloading",
                     progress=pct,
                     message=f"正在下载 {repo_id}（{pct}%）",
+                    speed=speed,
                 )
                 await asyncio.sleep(1.5)
             await drain

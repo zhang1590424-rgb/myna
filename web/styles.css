@@ -1126,6 +1126,11 @@ textarea.input {
   transition: width 0.4s ease;
 }
 
+.dl-speed {
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ═══════════════════ Dropzone ═══════════════════ */
 .dropzone {
   border: 1.5px dashed var(--border);
