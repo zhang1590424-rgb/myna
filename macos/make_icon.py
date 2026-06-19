@@ -28,11 +28,12 @@ def gradient(size: int) -> Image.Image:
         for x in range(size):
             nx = x / (size - 1)
             ny = y / (size - 1)
-            glow = max(0.0, 1.0 - ((nx - 0.72) ** 2 + (ny - 0.18) ** 2) * 4.4)
+            # 极深冷灰渐变，右上角略亮，无彩色高光
+            t = nx * 0.4 + (1 - ny) * 0.6
             base = (
-                int(18 + 20 * nx + 20 * glow),
-                int(21 + 26 * ny + 40 * glow),
-                int(27 + 42 * nx + 80 * glow),
+                int(14 + 18 * t),
+                int(17 + 22 * t),
+                int(23 + 28 * t),
                 255,
             )
             px[x, y] = base
@@ -90,25 +91,10 @@ def draw_icon(size: int) -> Image.Image:
     draw = ImageDraw.Draw(overlay)
     draw.line(
         m_scaled,
-        fill=(246, 248, 244, 255),
+        fill=(240, 242, 248, 255),
         width=int(84 * scale),
         joint="curve",
     )
-    draw.line(
-        [(int(x * scale), int(y * scale)) for x, y in [(386, 672), (512, 534), (638, 672)]],
-        fill=(83, 225, 204, 255),
-        width=int(44 * scale),
-        joint="curve",
-    )
-    for center, color, radius in [
-        ((296, 380), (112, 202, 255, 255), 38),
-        ((728, 380), (154, 133, 255, 255), 38),
-        ((512, 590), (83, 225, 204, 255), 32),
-    ]:
-        cx, cy = center
-        r = radius
-        box = tuple(int(v * scale) for v in (cx - r, cy - r, cx + r, cy + r))
-        draw.ellipse(box, fill=color)
 
     canvas.alpha_composite(overlay)
     return canvas
