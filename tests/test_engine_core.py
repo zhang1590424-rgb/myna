@@ -42,6 +42,33 @@ class TrainerLogParsingTests(unittest.TestCase):
         self.assertEqual(parsed["loss"], [])
         self.assertIsNone(parsed["eta"])
 
+    def test_collects_eval_loss(self) -> None:
+        text = "\n".join(
+            [
+                '{"current_steps": 5, "loss": 1.2, "epoch": 1.0, "percentage": 10.0}',
+                '{"current_steps": 5, "eval_loss": 1.5, "epoch": 1.0, "percentage": 10.0}',
+                '{"current_steps": 10, "eval_loss": 1.1, "epoch": 2.0, "percentage": 20.0}',
+            ]
+        )
+        parsed = parse_trainer_log(text)
+        self.assertEqual(parsed["eval_loss"], [1.5, 1.1])
+
+
+class CheckpointCleanupTests(unittest.TestCase):
+    def _make_checkpoint(self, output_dir: Path, step: int) -> None:
+        ckpt = output_dir / f"checkpoint-{step}"
+        ckpt.mkdir(parents=True, exist_ok=True)
+        (ckpt / "adapter_model.safetensors").write_text("x", encoding="utf-8")
+
+    def test_discard_removes_intermediate_checkpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out = Path(temp_dir)
+            for step in (5, 10, 15):
+                self._make_checkpoint(out, step)
+            LlamaFactoryTrainingEngine._discard_checkpoints(out)
+            remaining = sorted(p.name for p in out.glob("checkpoint-*"))
+            self.assertEqual(remaining, [])
+
 
 class PrecisionPolicyTests(unittest.TestCase):
     def test_mps_and_cpu_use_fp32(self) -> None:

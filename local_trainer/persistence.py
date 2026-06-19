@@ -10,7 +10,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-from .domain import DatasetInfo, Experiment
+from .domain import DatasetInfo, Experiment, LabResult
 from .paths import WORKBENCH_DB, ensure_runtime_dirs
 
 
@@ -34,6 +34,17 @@ CREATE TABLE IF NOT EXISTS datasets (
     created_at      TEXT NOT NULL,
     data            TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS lab_results (
+    id                TEXT PRIMARY KEY,
+    experiment_id     TEXT NOT NULL,
+    kind              TEXT NOT NULL,
+    prompt            TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    data              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lab_results_exp_created
+    ON lab_results(experiment_id, created_at);
 """
 
 
@@ -144,6 +155,56 @@ class Database:
     def delete_dataset(self, dataset_id: str) -> bool:
         with self._lock:
             cur = self._conn.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    # ---- lab results ---- #
+    def upsert_lab_result(self, result: LabResult) -> None:
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO lab_results (id, experiment_id, kind, prompt, created_at, data)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    experiment_id=excluded.experiment_id, kind=excluded.kind,
+                    prompt=excluded.prompt, created_at=excluded.created_at, data=excluded.data
+                """,
+                (
+                    result.id,
+                    result.experiment_id,
+                    result.kind,
+                    result.prompt,
+                    result.created_at,
+                    result.model_dump_json(),
+                ),
+            )
+            self._conn.commit()
+
+    def list_lab_results(self, experiment_id: str, limit: int = 50) -> list[LabResult]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT data FROM lab_results
+                WHERE experiment_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (experiment_id, limit),
+            ).fetchall()
+        return [LabResult.model_validate_json(row["data"]) for row in rows]
+
+    def get_lab_result(self, result_id: str) -> LabResult | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT data FROM lab_results WHERE id = ?", (result_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return LabResult.model_validate_json(row["data"])
+
+    def delete_lab_result(self, result_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM lab_results WHERE id = ?", (result_id,))
             self._conn.commit()
             return cur.rowcount > 0
 

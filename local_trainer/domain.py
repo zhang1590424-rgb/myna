@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -154,6 +154,7 @@ class Experiment(BaseModel):
     progress: int = 0
     message: str = "等待开始"
     loss: list[float] = Field(default_factory=list)
+    eval_loss: list[float] = Field(default_factory=list)  # 验证集 loss，用于观察是否可能训过头
     eta: str | None = None
     output_dir: str | None = None
     run_dir: str | None = None
@@ -258,3 +259,15 @@ class LabBatchTestResponse(BaseModel):
     experiment_id: str
     experiment_name: str
     results: list[LabBatchTestItem]
+
+
+class LabResult(BaseModel):
+    id: str
+    experiment_id: str
+    experiment_name: str
+    kind: Literal["compare", "batch", "chat"]
+    prompt: str
+    base_answer: str = ""
+    finetuned_answer: str = ""
+    created_at: str
+    data: dict[str, Any] = Field(default_factory=dict)

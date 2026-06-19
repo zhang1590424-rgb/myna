@@ -8,6 +8,7 @@ file, a dataset_info.json, and a train.yaml, then shells out to
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +17,11 @@ import yaml
 from .domain import DatasetRecord, Experiment, ModelOption, PreferenceRecord
 from .hardware import detect_device, llamafactory_cli, select_precision
 from .paths import RUNS_DIR, ensure_runtime_dirs
+
+# 样本数低于此值时不切验证集；验证集只剩几条时，曲线噪声大、参考价值低。
+MIN_SAMPLES_FOR_VALIDATION = 30
+# 切给验证集的比例。数据本就不多，留 15% 够观察趋势又不过度牺牲训练数据。
+VALIDATION_RATIO = 0.15
 
 
 @dataclass(frozen=True)
@@ -55,7 +61,12 @@ class LlamaFactoryConfigBuilder:
         else:
             self._write_alpaca_dataset(dataset_file, dataset_info_file, records)  # type: ignore[arg-type]
 
-        config = self._build_config(experiment, model, dataset_dir, output_dir, len(records))
+        # DPO 的 loss 含义不同，当前只给 SFT 自动切验证集，用作训练过程参考信号。
+        validation_enabled = experiment.method != "dpo" and len(records) >= MIN_SAMPLES_FOR_VALIDATION
+
+        config = self._build_config(
+            experiment, model, dataset_dir, output_dir, len(records), validation_enabled
+        )
         config_file.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
         return PreparedLlamaFactoryRun(
@@ -130,6 +141,7 @@ class LlamaFactoryConfigBuilder:
         dataset_dir: Path,
         output_dir: Path,
         sample_count: int,
+        validation_enabled: bool = False,
     ) -> dict[str, object]:
         params = experiment.params
         precision = select_precision(detect_device())
@@ -169,4 +181,34 @@ class LlamaFactoryConfigBuilder:
         if experiment.method == "dpo":
             config["pref_beta"] = params.beta
             config["pref_loss"] = "sigmoid"
+
+        if validation_enabled:
+            config.update(
+                _validation_config(
+                    sample_count=sample_count,
+                    batch_size=params.batch_size,
+                    grad_accum=params.grad_accum,
+                )
+            )
         return config
+
+
+def _steps_per_epoch(sample_count: int, batch_size: int, grad_accum: int) -> int:
+    """每个 epoch 的优化步数 = ceil(训练样本数 / (batch × 梯度累积))，至少 1。
+
+    训练样本数已扣除验证集占比，让验证点按 epoch 边界落点。
+    """
+    train_samples = max(1, math.ceil(sample_count * (1 - VALIDATION_RATIO)))
+    effective_batch = max(1, batch_size * grad_accum)
+    return max(1, math.ceil(train_samples / effective_batch))
+
+
+def _validation_config(sample_count: int, batch_size: int, grad_accum: int) -> dict[str, object]:
+    """训练过程验证配置：切验证集，每个 epoch 评估一次，记录 eval_loss 曲线。"""
+    interval = _steps_per_epoch(sample_count, batch_size, grad_accum)
+    return {
+        "val_size": VALIDATION_RATIO,
+        "eval_strategy": "steps",
+        "eval_steps": interval,
+        "per_device_eval_batch_size": batch_size,
+    }

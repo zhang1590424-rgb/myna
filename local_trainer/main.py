@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import uuid
+from datetime import datetime
+from typing import Literal
+
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +20,7 @@ from .domain import (
     LabChatRequest,
     LabCompareChatRequest,
     LabLoadRequest,
+    LabResult,
     UpdateExperimentRequest,
 )
 from .downloader import ModelDownloader
@@ -309,6 +315,41 @@ def lab_unload():
     return lab.unload()
 
 
+@app.get("/api/lab/history")
+def lab_history(experiment_id: str | None = None):
+    target_id = experiment_id or lab.status().experiment_id
+    if not target_id:
+        return {"experiment_id": None, "results": []}
+    return {"experiment_id": target_id, "results": db.list_lab_results(target_id)}
+
+
+@app.delete("/api/lab/history/{result_id}")
+def lab_history_delete(result_id: str):
+    if not db.delete_lab_result(result_id):
+        raise HTTPException(status_code=404, detail="没有找到这条测评记录。")
+    return {"ok": True}
+
+
+@app.get("/api/lab/history/{result_id}")
+def lab_history_get(result_id: str):
+    result = db.get_lab_result(result_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="没有找到这条测评记录。")
+    return result
+
+
+@app.get("/api/lab/starters")
+def lab_starters(experiment_id: str | None = None):
+    target_id = experiment_id or lab.status().experiment_id
+    if not target_id:
+        return {"experiment_id": None, "prompts": []}
+    try:
+        exp = experiments.get(target_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
+    return {"experiment_id": exp.id, "prompts": _starter_prompts_for_experiment(exp.dataset_id)}
+
+
 @app.post("/api/lab/chat")
 async def lab_chat(request: LabChatRequest):
     try:
@@ -337,7 +378,50 @@ async def lab_compare_chat(request: LabCompareChatRequest):
         raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    status = lab.status()
+    if status.experiment_id:
+        _save_lab_result(
+            experiment_id=status.experiment_id,
+            experiment_name=status.experiment_name or "未命名实验",
+            kind="compare",
+            result=result,
+            extra={"style": request.style, "gen_params": gen_params, "metrics": result.get("metrics", {})},
+        )
     return result
+
+
+@app.post("/api/lab/compare-runs")
+async def lab_compare_run(request: LabCompareChatRequest):
+    gen_params = resolve_gen_params(
+        request.style,
+        {
+            "temperature": request.temperature,
+            "top_p": request.top_p,
+            "repetition_penalty": request.repetition_penalty,
+            "no_repeat_ngram_size": request.no_repeat_ngram_size,
+        },
+    )
+    try:
+        status = lab.status()
+        if not status.loaded or not lab._experiment_id:
+            raise RuntimeError("请先加载一个实验。")
+        exp = experiments.get(lab._experiment_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    pending = _save_lab_result(
+        experiment_id=exp.id,
+        experiment_name=exp.name,
+        kind="compare",
+        result={"prompt": request.prompt, "base_answer": "", "finetuned_answer": ""},
+        extra={"status": "running", "style": request.style, "gen_params": gen_params},
+    )
+    asyncio.create_task(
+        _finish_compare_lab_result(pending.id, exp.id, request.prompt, request.max_new_tokens, gen_params)
+    )
+    return pending
 
 
 @app.post("/api/lab/batch-test")
@@ -368,6 +452,19 @@ async def lab_batch_test(request: LabBatchTestRequest):
             result = await lab.compare_chat(prompt, request.max_new_tokens)
             results.append(result)
 
+        source = "manual" if request.prompts else "dataset-sample"
+        _save_lab_result(
+            experiment_id=exp.id,
+            experiment_name=exp.name,
+            kind="batch",
+            result={
+                "prompt": f"批量测评（{len(results)} 条）",
+                "base_answer": "",
+                "finetuned_answer": "",
+            },
+            extra={"source": source, "results": results},
+        )
+
         return {
             "experiment_id": exp.id,
             "experiment_name": exp.name,
@@ -379,9 +476,227 @@ async def lab_batch_test(request: LabBatchTestRequest):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@app.post("/api/lab/batch-runs")
+async def lab_batch_run(request: LabBatchTestRequest):
+    try:
+        status = lab.status()
+        if not status.loaded or not lab._experiment_id:
+            raise RuntimeError("请先加载一个实验。")
+        exp = experiments.get(lab._experiment_id)
+        prompts = _lab_batch_prompts(exp.dataset_id, request.prompts)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    source = "manual" if request.prompts else "dataset-sample"
+    pending = _save_lab_result(
+        experiment_id=exp.id,
+        experiment_name=exp.name,
+        kind="batch",
+        result={"prompt": f"批量测评（{len(prompts)} 条）", "base_answer": "", "finetuned_answer": ""},
+        extra={"status": "running", "source": source, "results": [], "prompts": prompts},
+    )
+    asyncio.create_task(_finish_batch_lab_result(pending.id, exp.id, prompts, request.max_new_tokens, source))
+    return pending
+
+
+# --------------------------------------------------------------------------- #
+# Session-based chat (persistent model process)
+# --------------------------------------------------------------------------- #
+@app.post("/api/lab/session/start")
+async def lab_session_start(request: LabLoadRequest):
+    """启动常驻推理进程，加载模型到内存。"""
+    gen_params = resolve_gen_params("balanced")
+    try:
+        result = await lab.start_session(request.experiment_id, gen_params)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return result
+
+
+@app.post("/api/lab/session/chat")
+async def lab_session_chat(request: dict):
+    """向常驻进程发送对话请求。body: {messages, max_new_tokens}。"""
+    messages = request.get("messages", [])
+    max_new_tokens = request.get("max_new_tokens", 120)
+    if not messages:
+        raise HTTPException(status_code=400, detail="messages 不能为空。")
+    try:
+        result = await lab.session_chat(messages, max_new_tokens)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return result
+
+
+@app.post("/api/lab/session/end")
+async def lab_session_end(request: dict | None = None):
+    """结束对话 session，释放模型内存。可选保存对话记录。"""
+    body = request or {}
+    messages = body.get("messages", [])
+    experiment_id = body.get("experiment_id")
+
+    # 保存对话记录
+    if messages and experiment_id:
+        try:
+            exp = experiments.get(experiment_id)
+            first_user_msg = next((m["content"] for m in messages if m["role"] == "user"), "自由对话")
+            _save_lab_result(
+                experiment_id=exp.id,
+                experiment_name=exp.name,
+                kind="chat",
+                result={"prompt": first_user_msg[:80], "base_answer": "", "finetuned_answer": ""},
+                extra={"messages": messages, "status": "completed"},
+            )
+        except (KeyError, StopIteration):
+            pass
+
+    await lab.end_session()
+    return {"ok": True}
+
+
+@app.get("/api/lab/session/status")
+def lab_session_status():
+    """查询当前 session 状态。"""
+    return {
+        "active": lab.session_active,
+        "experiment_id": lab._experiment_id if lab.session_active else None,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+def _save_lab_result(
+    experiment_id: str,
+    experiment_name: str,
+    kind: Literal["compare", "batch", "chat"],
+    result: dict,
+    extra: dict | None = None,
+) -> LabResult:
+    lab_result = LabResult(
+        id=uuid.uuid4().hex,
+        experiment_id=experiment_id,
+        experiment_name=experiment_name,
+        kind=kind,
+        prompt=result.get("prompt", ""),
+        base_answer=result.get("base_answer", ""),
+        finetuned_answer=result.get("finetuned_answer", ""),
+        created_at=datetime.now().isoformat(timespec="seconds"),
+        data=extra or {},
+    )
+    db.upsert_lab_result(lab_result)
+    return lab_result
+
+
+def _update_lab_result(result_id: str, result: dict, extra: dict) -> None:
+    saved = db.get_lab_result(result_id)
+    if saved is None:
+        return
+    result_extra = {}
+    if result.get("metrics"):
+        result_extra["metrics"] = result["metrics"]
+    db.upsert_lab_result(
+        saved.model_copy(
+            update={
+                "prompt": result.get("prompt", saved.prompt),
+                "base_answer": result.get("base_answer", saved.base_answer),
+                "finetuned_answer": result.get("finetuned_answer", saved.finetuned_answer),
+                "data": {**saved.data, **result_extra, **extra},
+            }
+        )
+    )
+
+
+async def _finish_compare_lab_result(
+    result_id: str,
+    experiment_id: str,
+    prompt: str,
+    max_new_tokens: int,
+    gen_params: dict,
+) -> None:
+    try:
+        lab.load(experiment_id, True)
+        result = await lab.compare_chat(prompt, max_new_tokens, gen_params)
+        _update_lab_result(result_id, result, {"status": "completed"})
+    except Exception as exc:
+        _update_lab_result(
+            result_id,
+            {"prompt": prompt, "base_answer": "", "finetuned_answer": ""},
+            {"status": "failed", "error": str(exc)},
+        )
+
+
+async def _finish_batch_lab_result(
+    result_id: str,
+    experiment_id: str,
+    prompts: list[str],
+    max_new_tokens: int,
+    source: str,
+) -> None:
+    results = []
+    try:
+        lab.load(experiment_id, True)
+        for prompt in prompts:
+            results.append(await lab.compare_chat(prompt, max_new_tokens))
+        _update_lab_result(
+            result_id,
+            {"prompt": f"批量测评（{len(results)} 条）", "base_answer": "", "finetuned_answer": ""},
+            {"status": "completed", "source": source, "results": results},
+        )
+    except Exception as exc:
+        _update_lab_result(
+            result_id,
+            {"prompt": f"批量测评（{len(prompts)} 条）", "base_answer": "", "finetuned_answer": ""},
+            {"status": "failed", "source": source, "results": results, "error": str(exc)},
+        )
+
+
+def _lab_batch_prompts(dataset_id: str, request_prompts: list[str]) -> list[str]:
+    prompts = [p.strip() for p in request_prompts if p.strip()]
+    if prompts:
+        return prompts
+    try:
+        records = datasets._read_rows(dataset_id)
+        prompts = [
+            r.get("instruction", r.get("query", ""))
+            for r in records[:5]
+            if r.get("instruction") or r.get("query")
+        ]
+    except Exception:
+        prompts = []
+    return prompts or ["你好，请介绍一下你自己。"]
+
+
+def _starter_prompts_for_experiment(dataset_id: str, limit: int = 4) -> list[str]:
+    fallback = ["你好，请介绍一下你自己。"]
+    try:
+        rows = datasets._read_rows(dataset_id)
+    except Exception:
+        return fallback
+
+    prompts: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        raw = row.get("instruction") or row.get("query") or row.get("question") or ""
+        prompt = str(raw).strip()
+        if not prompt or prompt in seen:
+            continue
+        seen.add(prompt)
+        prompts.append(prompt[:120])
+
+    if not prompts:
+        return fallback
+    if len(prompts) <= limit:
+        return prompts
+
+    # Deterministic spread across the dataset instead of always showing the first rows.
+    step = (len(prompts) - 1) / (limit - 1)
+    return [prompts[round(i * step)] for i in range(limit)]
+
+
 def _validate_experiment_inputs(model_id: str, dataset_id: str, method: str) -> None:
     if not real_engine_ready():
         raise HTTPException(

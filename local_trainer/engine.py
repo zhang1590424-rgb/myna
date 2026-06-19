@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import shutil
 import signal
 import zipfile
 from dataclasses import dataclass
@@ -53,8 +54,12 @@ class TrainingEngine(Protocol):
 
 
 def parse_trainer_log(text: str) -> dict[str, object]:
-    """Turn a trainer_log.jsonl body into progress/loss/eta we can show."""
+    """Turn a trainer_log.jsonl body into progress/loss/eta we can show.
+
+    训练配置启用验证集时，还会收集 eval_loss 作为过程参考曲线。
+    """
     losses: list[float] = []
+    eval_losses: list[float] = []
     last: dict[str, object] = {}
     for line in text.splitlines():
         line = line.strip()
@@ -66,6 +71,8 @@ def parse_trainer_log(text: str) -> dict[str, object]:
             continue
         if "loss" in entry:
             losses.append(float(entry["loss"]))
+        if "eval_loss" in entry:
+            eval_losses.append(float(entry["eval_loss"]))
         last = entry
 
     percentage = float(last.get("percentage", 0.0)) if last else 0.0
@@ -73,6 +80,7 @@ def parse_trainer_log(text: str) -> dict[str, object]:
     return {
         "progress": int(min(99, math.floor(percentage))),
         "loss": losses,
+        "eval_loss": eval_losses,
         "eta": last.get("remaining_time"),
         "epoch": math.ceil(float(epoch)) if isinstance(epoch, (int, float)) else None,
     }
@@ -202,11 +210,18 @@ class LlamaFactoryTrainingEngine:
             exp_id,
             progress=max(exp.progress, int(parsed["progress"])),
             loss=parsed["loss"],
+            eval_loss=parsed["eval_loss"],
             eta=parsed["eta"],
             message=message,
         )
 
-    def _finish(self, exp_id: str, returncode: int | None, output_dir: Path, stderr: str) -> None:
+    def _finish(
+        self,
+        exp_id: str,
+        returncode: int | None,
+        output_dir: Path,
+        stderr: str,
+    ) -> None:
         if exp_id in self._stopping:
             self.experiments.apply_changes(
                 exp_id,
@@ -223,16 +238,18 @@ class LlamaFactoryTrainingEngine:
             if exp.loss:
                 metrics["final_loss"] = round(exp.loss[-1], 4)
                 metrics["peak_loss"] = round(max(exp.loss), 4)
-            self.experiments.apply_changes(
-                exp_id,
-                status=ExperimentStatus.completed.value,
-                progress=100,
-                output_dir=str(output_dir),
-                finished_at=utc_now(),
-                eta=None,
-                metrics=metrics,
-                message="训练完成，可以到测评试试它学到了什么。",
-            )
+
+            self._discard_checkpoints(output_dir)
+            changes: dict[str, object] = {
+                "status": ExperimentStatus.completed.value,
+                "progress": 100,
+                "output_dir": str(output_dir),
+                "finished_at": utc_now(),
+                "eta": None,
+                "metrics": metrics,
+                "message": "训练完成，可以到测评试试它学到了什么。",
+            }
+            self.experiments.apply_changes(exp_id, **changes)
             return
 
         self.experiments.apply_changes(
@@ -242,6 +259,14 @@ class LlamaFactoryTrainingEngine:
             error=stderr[-2000:] if stderr else f"exit code {returncode}",
             message=_humanize_failure(stderr),
         )
+
+    @staticmethod
+    def _discard_checkpoints(output_dir: Path, keep: set[str] | None = None) -> None:
+        """删除中间 checkpoint 目录；训完产物在 output_dir 根目录。"""
+        keep = keep or set()
+        for child in output_dir.glob("checkpoint-*"):
+            if child.is_dir() and child.name not in keep:
+                shutil.rmtree(child, ignore_errors=True)
 
     async def stop(self, exp_id: str) -> Experiment:
         proc = self._procs.get(exp_id)

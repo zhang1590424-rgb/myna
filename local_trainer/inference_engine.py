@@ -1,20 +1,23 @@
 """Lab inference: load an experiment's output and chat against it.
 
-Each chat is a one-shot subprocess (load base + adapter, answer, exit). On
-M2/16GB holding a model resident between requests is risky, so we trade per-call
-latency for memory safety and process isolation. "Loaded" here means a pinned
-target (which experiment to answer with), not a resident model.
+Supports two modes:
+1. One-shot subprocess (legacy): load base + adapter, answer, exit. Memory-safe.
+2. Session mode (new): keep model resident for multi-turn conversation. User
+   manually controls load/unload lifecycle for explicit memory management.
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 
 from .domain import LabStatus
 from .experiment_service import ExperimentService
 from .hardware import training_env
 from .model_registry import get_model
+
+logger = logging.getLogger(__name__)
 
 # 回答风格档位 → 底层解码参数。用户只在界面选档位，参数藏在背后。
 # 详见 infer.GenParams：这些只影响“怎么把话说出来”，与模型权重无关。
@@ -44,6 +47,8 @@ class InferenceEngine:
         self.experiments = experiments
         self._experiment_id: str | None = None
         self._use_adapter: bool = True
+        self._session_proc: asyncio.subprocess.Process | None = None
+        self._session_gen_params: dict | None = None
 
     def status(self) -> LabStatus:
         if self._experiment_id is None:
@@ -80,14 +85,15 @@ class InferenceEngine:
         max_new_tokens: int,
         adapter_path: str | None = None,
         gen_params: dict | None = None,
-    ) -> str:
-        """启动子进程推理，返回回答文本。"""
+        mode: str = "chat",
+    ) -> dict:
+        """启动子进程推理，返回 worker 输出的 JSON 结果。"""
         args = [
             sys.executable,
             "-m",
             "local_trainer.infer",
             "--mode",
-            "chat",
+            mode,
             "--base",
             model_path,
             "--prompt",
@@ -115,8 +121,7 @@ class InferenceEngine:
         if proc.returncode != 0:
             detail = stderr.decode("utf-8", "ignore")[-500:]
             raise RuntimeError(f"模型加载或推理失败。{detail}")
-        payload = json.loads(stdout.decode("utf-8").strip().splitlines()[-1])
-        return payload["answer"]
+        return json.loads(stdout.decode("utf-8").strip().splitlines()[-1])
 
     async def chat(self, prompt: str, max_new_tokens: int = 120, gen_params: dict | None = None) -> str:
         if self._experiment_id is None:
@@ -131,7 +136,8 @@ class InferenceEngine:
             raise RuntimeError("请输入要测试的问题。")
 
         adapter = exp.output_dir if self._use_adapter else None
-        return await self._run_inference(model.local_path, prompt, max_new_tokens, adapter, gen_params)
+        payload = await self._run_inference(model.local_path, prompt, max_new_tokens, adapter, gen_params)
+        return payload["answer"]
 
     async def compare_chat(self, prompt: str, max_new_tokens: int = 120, gen_params: dict | None = None) -> dict:
         """同一 prompt 分别用 base 和 fine-tuned 推理，返回两个结果。"""
@@ -146,7 +152,125 @@ class InferenceEngine:
         if not prompt:
             raise RuntimeError("请输入要测试的问题。")
 
-        # 先跑 base（不加 adapter），再跑 fine-tuned（加 adapter）
-        base_answer = await self._run_inference(model.local_path, prompt, max_new_tokens, adapter_path=None, gen_params=gen_params)
-        finetuned_answer = await self._run_inference(model.local_path, prompt, max_new_tokens, adapter_path=exp.output_dir, gen_params=gen_params)
-        return {"prompt": prompt, "base_answer": base_answer, "finetuned_answer": finetuned_answer}
+        payload = await self._run_inference(
+            model.local_path,
+            prompt,
+            max_new_tokens,
+            adapter_path=exp.output_dir,
+            gen_params=gen_params,
+            mode="compare",
+        )
+        return {
+            "prompt": prompt,
+            "base_answer": payload["before"],
+            "finetuned_answer": payload["after"],
+            "metrics": payload.get("metrics", {}),
+        }
+
+    # ---------------------------------------------------------------------- #
+    # Session mode: 常驻推理进程，支持多轮对话
+    # ---------------------------------------------------------------------- #
+
+    async def start_session(self, experiment_id: str, gen_params: dict | None = None) -> dict:
+        """启动常驻推理子进程。返回 {"status": "ready"} 或 {"status": "loading", ...}。"""
+        if self._session_proc is not None:
+            await self.end_session()
+
+        exp = self.experiments.get(experiment_id)
+        if exp.status != "completed" or not exp.output_dir:
+            raise RuntimeError("只有训练完成的实验才能加载到测评。")
+
+        model = get_model(exp.model_id)
+        if not model.local_path:
+            raise RuntimeError("没找到本地基础模型，无法对话。")
+
+        self._experiment_id = experiment_id
+        self._use_adapter = True
+
+        args = [
+            sys.executable,
+            "-m",
+            "local_trainer.infer",
+            "--mode", "session",
+            "--base", model.local_path,
+        ]
+        if exp.output_dir:
+            args += ["--adapter", exp.output_dir]
+        if gen_params:
+            args += [
+                "--temperature", str(gen_params.get("temperature", 0.7)),
+                "--top-p", str(gen_params.get("top_p", 0.9)),
+                "--repetition-penalty", str(gen_params.get("repetition_penalty", 1.15)),
+                "--no-repeat-ngram-size", str(gen_params.get("no_repeat_ngram_size", 3)),
+            ]
+
+        self._session_proc = await asyncio.create_subprocess_exec(
+            *args,
+            env=training_env(),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        self._session_gen_params = gen_params
+
+        # 等待 ready 信号（逐行读 stdout）
+        while True:
+            line = await self._session_proc.stdout.readline()
+            if not line:
+                stderr = await self._session_proc.stderr.read()
+                raise RuntimeError(f"模型加载失败：{stderr.decode('utf-8', 'ignore')[-300:]}")
+            try:
+                msg = json.loads(line.decode("utf-8").strip())
+            except json.JSONDecodeError:
+                continue
+            if msg.get("status") == "ready":
+                return {"status": "ready", "experiment_id": experiment_id}
+            if msg.get("status") == "loading":
+                continue
+            # 异常消息
+            if "error" in msg:
+                raise RuntimeError(msg["error"])
+
+    async def session_chat(self, messages: list[dict], max_new_tokens: int = 120) -> dict:
+        """向常驻进程发送一次对话请求。messages 是完整的对话历史。"""
+        if self._session_proc is None or self._session_proc.returncode is not None:
+            raise RuntimeError("对话进程未启动，请先加载模型。")
+
+        request = json.dumps({
+            "messages": messages,
+            "max_new_tokens": max_new_tokens,
+        }, ensure_ascii=False) + "\n"
+
+        self._session_proc.stdin.write(request.encode("utf-8"))
+        await self._session_proc.stdin.drain()
+
+        line = await self._session_proc.stdout.readline()
+        if not line:
+            raise RuntimeError("推理进程异常退出。")
+
+        result = json.loads(line.decode("utf-8").strip())
+        if "error" in result:
+            raise RuntimeError(result["error"])
+        return result
+
+    async def end_session(self) -> None:
+        """终止常驻推理子进程，释放内存。"""
+        if self._session_proc is None:
+            return
+        try:
+            if self._session_proc.returncode is None:
+                quit_cmd = json.dumps({"action": "quit"}) + "\n"
+                self._session_proc.stdin.write(quit_cmd.encode("utf-8"))
+                await self._session_proc.stdin.drain()
+                try:
+                    await asyncio.wait_for(self._session_proc.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    self._session_proc.kill()
+        except (ProcessLookupError, BrokenPipeError, OSError):
+            pass
+        self._session_proc = None
+        self._session_gen_params = None
+
+    @property
+    def session_active(self) -> bool:
+        return self._session_proc is not None and self._session_proc.returncode is None
