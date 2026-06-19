@@ -51,6 +51,61 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    // 点 Dock 图标时触发：服务活着直接开浏览器，挂了则重启
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        startOrOpen()
+        return false
+    }
+
+    // Dock 右键菜单
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        let openItem = NSMenuItem(title: "打开 Myna", action: #selector(openMyna), keyEquivalent: "")
+        openItem.target = self
+        menu.addItem(openItem)
+        return menu
+    }
+
+    // 退出前检查是否有训练任务在运行
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard startedByThisApp else { return .terminateNow }
+
+        var request = URLRequest(url: URL(string: "http://\(host):\(port)/api/queue")!)
+        request.timeoutInterval = 1.5
+        let semaphore = DispatchSemaphore(value: 0)
+        var hasRunning = false
+
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            if let data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let runningId = json["running_id"],
+               !(runningId is NSNull) {
+                hasRunning = true
+            }
+            semaphore.signal()
+        }.resume()
+        semaphore.wait()
+
+        guard hasRunning else { return .terminateNow }
+
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "训练任务正在进行"
+            alert.informativeText = "当前有一个模型训练任务正在运行。现在退出将中断训练，已训练的进度会丢失。"
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "继续退出")
+            alert.addButton(withTitle: "取消")
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn {
+                NSApp.reply(toApplicationShouldTerminate: true)
+            } else {
+                NSApp.reply(toApplicationShouldTerminate: false)
+            }
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         readinessTimer?.invalidate()
         if startedByThisApp, let process = serverProcess, process.isRunning {
