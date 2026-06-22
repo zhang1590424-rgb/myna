@@ -1,10 +1,34 @@
 from __future__ import annotations
 
+import time
+
 from .domain import EnvironmentStatus, ModelStatus
 from .model_registry import get_model_catalog
 
+_env_cache: EnvironmentStatus | None = None
+_env_cache_ts: float = 0.0
+_ENV_CACHE_TTL: float = 10.0  # 10 秒内复用缓存
 
-def collect_environment_status() -> EnvironmentStatus:
+
+def collect_environment_status(*, force: bool = False) -> EnvironmentStatus:
+    global _env_cache, _env_cache_ts
+    now = time.monotonic()
+    if not force and _env_cache is not None and (now - _env_cache_ts) < _ENV_CACHE_TTL:
+        return _env_cache
+    status = _collect_environment_status_impl()
+    _env_cache = status
+    _env_cache_ts = now
+    return status
+
+
+def invalidate_environment_cache() -> None:
+    """下载完成或环境变更时主动失效缓存。"""
+    global _env_cache, _env_cache_ts
+    _env_cache = None
+    _env_cache_ts = 0.0
+
+
+def _collect_environment_status_impl() -> EnvironmentStatus:
     llamafactory_ok = _can_import("llamafactory")
     torch_mps_ok = _torch_mps_available()
     models = [

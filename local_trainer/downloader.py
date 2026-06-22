@@ -132,6 +132,11 @@ class ModelDownloader:
                 progress=100,
                 message="下载完成，可以选择这个模型开始训练了。",
             )
+            # 下载完成，失效模型和环境缓存
+            from .model_registry import invalidate_model_catalog_cache
+            from .environment import invalidate_environment_cache
+            invalidate_model_catalog_cache()
+            invalidate_environment_cache()
         else:
             self._status[model_id] = ModelDownloadStatus(
                 model_id=model_id,

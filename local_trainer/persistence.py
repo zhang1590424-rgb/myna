@@ -196,6 +196,23 @@ class Database:
             ).fetchall()
         return [LabResult.model_validate_json(row["data"]) for row in rows]
 
+    def list_lab_results_batch(self, experiment_ids: list[str], limit: int = 100) -> list[LabResult]:
+        """一次查询多个实验的测评历史。"""
+        if not experiment_ids:
+            return []
+        placeholders = ",".join("?" for _ in experiment_ids)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT data FROM lab_results
+                WHERE experiment_id IN ({placeholders})
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (*experiment_ids, limit),
+            ).fetchall()
+        return [LabResult.model_validate_json(row["data"]) for row in rows]
+
     def list_recent_lab_results(self, limit: int = 6) -> list[LabResult]:
         with self._lock:
             rows = self._conn.execute(

@@ -89,6 +89,10 @@ function el(tag, attrs = {}, children = []) {
 function clear(node) {
   if (node === canvas) {
     node.classList.remove("chat-main");
+    // trigger fade-in animation on view change
+    node.classList.remove("fade-in");
+    void node.offsetWidth; // force reflow
+    node.classList.add("fade-in");
   }
   node.replaceChildren();
 }
@@ -144,6 +148,10 @@ function fmtLoss(value) {
 }
 
 /* ---------------- data loading ---------------- */
+let _metaPromise = null;
+let _coreLoadedAt = 0;
+const _CORE_STALE_MS = 5000; // 5 秒内视为新鲜，不重复拉取
+
 async function refreshCore() {
   const [models, datasets, experiments] = await Promise.all([
     api("/api/models"),
@@ -153,6 +161,13 @@ async function refreshCore() {
   state.models = models;
   state.datasets = datasets;
   state.experiments = experiments;
+  _coreLoadedAt = Date.now();
+}
+
+/** 5 秒内不重复拉取 core 数据 */
+async function refreshCoreIfStale() {
+  if (Date.now() - _coreLoadedAt < _CORE_STALE_MS && state.experiments.length) return;
+  await refreshCore();
 }
 
 async function refreshExperiments() {
@@ -160,15 +175,24 @@ async function refreshExperiments() {
 }
 
 async function ensureMeta() {
-  if (state.presets.length && state.templates.length) return;
-  const [presets, templates, environment] = await Promise.all([
-    api("/api/training-presets"),
-    api("/api/templates"),
-    api("/api/environment"),
-  ]);
-  state.presets = presets;
-  state.templates = templates;
-  state.environment = environment;
+  if (state.presets.length && state.templates.length && state.environment) return;
+  if (!_metaPromise) {
+    _metaPromise = Promise.all([
+      api("/api/training-presets"),
+      api("/api/templates"),
+      api("/api/environment"),
+    ]).then(([presets, templates, environment]) => {
+      state.presets = presets;
+      state.templates = templates;
+      state.environment = environment;
+    });
+  }
+  await _metaPromise;
+}
+
+/** 启动时预取 meta，不阻塞首屏 */
+function preloadMeta() {
+  ensureMeta().catch(() => { _metaPromise = null; });
 }
 
 async function refreshQueue() {
@@ -210,8 +234,17 @@ function navigate(path) {
 async function render() {
   stopPolling();
   const { view, arg } = parseHash();
-  const navView = ["new", "detail", "compare"].includes(view) ? "experiments" : view;
+  const navView = ["new", "detail", "compare", "dataset-detail"].includes(view) ? (view === "dataset-detail" ? "datasets" : "experiments") : view;
   navButtons.forEach((b) => b.classList.toggle("active", b.dataset.view === navView));
+
+  // 非首页 Tab 切换时立即显示 loading 占位，避免"点了没反应"
+  if (view !== "home") {
+    clear(canvas);
+    canvas.appendChild(el("div", { class: "loading-placeholder" }, [
+      el("span", { class: "loading-dot" }),
+      el("span", {}, "加载中…"),
+    ]));
+  }
 
   try {
     if (view === "home") {
@@ -220,41 +253,37 @@ async function render() {
       refreshHomeLabHistory();
       maybePoll();
     } else if (view === "experiments") {
-      await ensureMeta();
-      await refreshCore();
+      await Promise.all([ensureMeta(), refreshCoreIfStale()]);
       renderExperiments();
       maybePoll();
     } else if (view === "new") {
-      await ensureMeta();
-      await refreshCore();
-      // Engine mode can change after the user downloads a model, so re-check
-      // the live environment instead of trusting the cached value.
-      try {
-        state.environment = await api("/api/environment");
-      } catch {
-        /* keep cached environment on failure */
-      }
+      await Promise.all([ensureMeta(), refreshCoreIfStale()]);
+      // 下载模型后环境状态可能变化，后台刷新环境（不阻塞渲染）
+      api("/api/environment").then((env) => { state.environment = env; }).catch(() => {});
       renderNewExperiment(arg);
     } else if (view === "detail") {
-      await ensureMeta();
-      await refreshCore();
+      await Promise.all([ensureMeta(), refreshCoreIfStale()]);
       await renderDetail(arg);
     } else if (view === "compare") {
-      await refreshCore();
+      await refreshCoreIfStale();
       await renderCompare(arg);
     } else if (view === "models") {
       state.models = await api("/api/models");
       renderModels();
     } else if (view === "datasets") {
-      state.datasets = await api("/api/datasets");
-      await ensureMeta();
+      await Promise.all([
+        api("/api/datasets").then((d) => { state.datasets = d; }),
+        ensureMeta(),
+      ]);
       if (arg === "new") {
         renderDatasetUpload();
       } else {
         renderDatasets();
       }
+    } else if (view === "dataset-detail") {
+      await renderDatasetDetail(arg);
     } else if (view === "lab") {
-      await refreshCore();
+      await refreshCoreIfStale();
       await renderLab(arg);
     } else {
       navigate("/home");
@@ -341,6 +370,9 @@ async function refreshHomeLabHistory() {
   } catch {
     return;
   }
+  // 只保留属于当前 completed 实验的测评记录，与测评页一致
+  const completedIds = new Set(completed.map((e) => e.id));
+  labHistory = labHistory.filter((item) => completedIds.has(item.experiment_id));
   if (parseHash().view !== "home") return;
   const panel = document.getElementById("homeEvaluationPanel");
   if (!panel) return;
@@ -374,7 +406,7 @@ function renderHomeShortcuts() {
     ["新建测评", "对比训练前后回答差异", "/lab/new"],
   ];
   return el("section", { class: "home-section" }, [
-    el("div", { class: "home-shortcuts" },
+    el("div", { class: "home-shortcuts stagger" },
       items.map(([label, hint, route], index) =>
         el("button", { class: "home-shortcut", onClick: () => navigate(route) }, [
           el("span", { class: "home-shortcut-index tnum" }, String(index + 1)),
@@ -551,7 +583,7 @@ function renderExperiments() {
   ]);
   canvas.appendChild(toolbar);
 
-  const table = el("div", { class: "exp-table" });
+  const table = el("div", { class: "exp-table stagger" });
   canvas.appendChild(table);
 
   function renderRows() {
@@ -1910,7 +1942,7 @@ function renderDatasetUpload() {
 }
 
 function datasetRow(d) {
-  return el("div", { class: "list-row" }, [
+  return el("div", { class: "list-row clickable", onClick: () => navigate(`/dataset-detail/${d.id}`) }, [
     el("div", {}, [
       el("div", { class: "row-name" }, [
         el("span", { class: "row-name-text", title: d.name }, d.name),
@@ -1926,16 +1958,9 @@ function datasetRow(d) {
       el(
         "button",
         {
-          class: "btn btn-sm",
-          onClick: () => previewDataset(d.id),
-        },
-        "预览"
-      ),
-      el(
-        "button",
-        {
           class: "btn btn-sm danger",
-          onClick: async () => {
+          onClick: async (e) => {
+            e.stopPropagation();
             if (!confirm(`删除数据集「${d.name}」？`)) return;
             try {
               await api(`/api/datasets/${d.id}`, { method: "DELETE" });
@@ -1978,6 +2003,86 @@ async function previewDataset(id) {
     box.scrollIntoView({ behavior: "smooth", block: "nearest" });
   } catch (err) {
     toast(err.message, true);
+  }
+}
+
+async function renderDatasetDetail(id) {
+  const data = await api(`/api/datasets/${id}`);
+  const info = data.info;
+  const rows = data.preview || [];
+
+  clear(canvas);
+  removeCompareBar();
+
+  canvas.appendChild(
+    el("button", { class: "back-link", onClick: () => navigate("/datasets") }, "← 返回数据列表")
+  );
+
+  // 隐藏的文件 input 用于「更新数据」
+  const fileInput = el("input", { type: "file", accept: ".csv,.json,.jsonl,.xlsx", style: "display:none" });
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      await api(`/api/datasets/${id}`, { method: "PUT", body: fd });
+      toast("数据已更新。");
+      await renderDatasetDetail(id);
+    } catch (err) {
+      toast(err.message, true);
+    }
+    fileInput.value = "";
+  });
+  canvas.appendChild(fileInput);
+
+  const actions = [
+    el("button", { class: "btn", onClick: () => fileInput.click() }, "更新数据"),
+    el("a", { class: "btn", href: `/api/datasets/${id}/download` }, "下载"),
+    el("button", {
+      class: "btn danger",
+      onClick: async () => {
+        if (!confirm(`删除数据集「${info.name}」？`)) return;
+        try {
+          await api(`/api/datasets/${id}`, { method: "DELETE" });
+          toast("已删除。");
+          navigate("/datasets");
+        } catch (err) {
+          toast(err.message, true);
+        }
+      },
+    }, "删除"),
+  ];
+
+  canvas.appendChild(
+    el("div", { class: "view-head" }, [
+      el("div", {}, [
+        el("h1", { class: "view-title" }, info.name),
+        el(
+          "p",
+          { class: "view-sub" },
+          `${info.format === "dpo_pairs" ? "偏好 DPO" : "问答 SFT"} · ${info.row_count} 条 · 来自 ${info.source_filename} · ${relativeTime(info.created_at)}`
+        ),
+      ]),
+      el("div", { class: "row-actions" }, actions),
+    ])
+  );
+
+  // 数据预览表格
+  if (rows.length) {
+    canvas.appendChild(el("div", { class: "section-label" }, `数据预览（前 ${rows.length} 条）`));
+    const cols = Object.keys(rows[0]);
+    const table = el("table", { class: "preview-table" }, [
+      el("thead", {}, [el("tr", {}, cols.map((c) => el("th", {}, c)))]),
+      el(
+        "tbody",
+        {},
+        rows.map((r) => el("tr", {}, cols.map((c) => el("td", {}, String(r[c] ?? "")))))
+      ),
+    ]);
+    canvas.appendChild(table);
+  } else {
+    canvas.appendChild(el("div", { class: "empty" }, [el("p", { class: "empty-title" }, "这份数据没有可预览的内容")]));
   }
 }
 
@@ -2099,17 +2204,13 @@ function labExperimentName(id) {
 }
 
 async function loadAllLabHistory(completed) {
-  const groups = await Promise.all(
-    completed.map(async (exp) => {
-      try {
-        const data = await api(`/api/lab/history?experiment_id=${encodeURIComponent(exp.id)}`);
-        return data.results || [];
-      } catch {
-        return [];
-      }
-    })
-  );
-  return groups.flat().sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  const ids = completed.map((e) => encodeURIComponent(e.id)).join(",");
+  try {
+    const data = await api(`/api/lab/history/batch?experiment_ids=${ids}&limit=100`);
+    return (data.results || []).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  } catch {
+    return [];
+  }
 }
 
 function renderLabEmpty() {
@@ -2137,7 +2238,7 @@ function renderLabHeader({ subtitle, actions = [] }) {
         el("h1", { class: "view-title" }, "测评"),
         el("p", { class: "view-sub" }, subtitle),
       ]),
-      actions.length ? el("div", { class: "lab-head-actions" }, actions) : null,
+      actions.length ? el("div", { class: "row-actions lab-head-actions" }, actions) : null,
     ])
   );
 }
@@ -2237,8 +2338,8 @@ function labHistoryRow(item, completed, history) {
   const questionCount = labResultItems(item).length || 1;
   const status = labResultStatus(item);
   const kindLabel = item.kind === "batch" ? "批量测评" : item.kind === "chat" ? "自由对话" : "单问对比";
-  return el("div", { class: "lab-history-row" }, [
-    el("button", { class: "lab-history-main", onClick: () => renderLabDetail(item, completed, history) }, [
+  return el("div", { class: "lab-history-row clickable", onClick: () => renderLabDetail(item, completed, history) }, [
+    el("div", { class: "lab-history-main" }, [
       el("span", { class: "lab-history-title" }, item.kind === "batch" ? item.prompt || "批量测评" : item.kind === "chat" ? item.prompt || "自由对话" : item.prompt),
       el("span", { class: "lab-history-meta" }, [
         kindLabel,
@@ -2250,8 +2351,9 @@ function labHistoryRow(item, completed, history) {
       ]),
     ]),
     el("button", {
-      class: "history-delete",
-      onClick: async () => {
+      class: "btn btn-sm danger",
+      onClick: async (e) => {
+        e.stopPropagation();
         if (!confirm("删除这条测评记录？")) return;
         try {
           await api(`/api/lab/history/${item.id}`, { method: "DELETE" });
@@ -2270,6 +2372,12 @@ async function renderLabNew(completed, initialExperimentId, history = []) {
   let mode = "compare";
   let batchSource = "sample";
 
+  if (history.length) {
+    canvas.appendChild(
+      el("button", { class: "back-link", onClick: () => renderLabHistoryHome(completed, history) }, "← 返回测评历史")
+    );
+  }
+
   const select = el(
     "select",
     { class: "lab-select" },
@@ -2280,9 +2388,7 @@ async function renderLabNew(completed, initialExperimentId, history = []) {
 
   renderLabHeader({
     subtitle: history.length ? "选择训练结果，用一组问题验证训练前后的变化。" : "第一次测评：选择一个已完成的训练结果开始验证。",
-    actions: history.length ? [
-      el("button", { class: "btn", onClick: () => renderLabHistoryHome(completed, history) }, "返回历史"),
-    ] : [],
+    actions: [],
   });
 
   canvas.appendChild(form);
@@ -2482,14 +2588,30 @@ function renderLabDetail(item, completed, history) {
     return;
   }
 
+  canvas.appendChild(
+    el("button", { class: "back-link", onClick: () => renderLabHistoryHome(completed, history) }, "← 返回测评历史")
+  );
+
   const rows = labResultItems(item);
   const typeLabel = item.kind === "batch" ? "批量测评" : "单问对比";
   const status = labResultStatus(item);
   renderLabHeader({
     subtitle: `${typeLabel} · ${labExperimentName(item.experiment_id)} · ${formatDateTime(item.created_at)}`,
     actions: [
-      el("button", { class: "btn", onClick: () => renderLabHistoryHome(completed, history) }, "返回历史"),
       el("button", { class: "btn primary", onClick: () => renderLabNew(completed, item.experiment_id, history) }, "新建测评"),
+      el("button", {
+        class: "btn danger",
+        onClick: async () => {
+          if (!confirm("删除这条测评记录？")) return;
+          try {
+            await api(`/api/lab/history/${item.id}`, { method: "DELETE" });
+            toast("已删除。");
+            renderLabHistoryHome(completed, await loadAllLabHistory(completed));
+          } catch (err) {
+            toast(err.message, true);
+          }
+        },
+      }, "删除"),
     ],
   });
 
@@ -2521,10 +2643,27 @@ function renderLabDetail(item, completed, history) {
 
 function renderLabChatDetail(item, completed, history) {
   const chatMessages = item.data?.messages || [];
+
+  canvas.appendChild(
+    el("button", { class: "back-link", onClick: () => renderLabHistoryHome(completed, history) }, "← 返回测评历史")
+  );
+
   renderLabHeader({
     subtitle: `自由对话 · ${labExperimentName(item.experiment_id)} · ${formatDateTime(item.created_at)}`,
     actions: [
-      el("button", { class: "btn", onClick: () => renderLabHistoryHome(completed, history) }, "返回历史"),
+      el("button", {
+        class: "btn danger",
+        onClick: async () => {
+          if (!confirm("删除这条测评记录？")) return;
+          try {
+            await api(`/api/lab/history/${item.id}`, { method: "DELETE" });
+            toast("已删除。");
+            renderLabHistoryHome(completed, await loadAllLabHistory(completed));
+          } catch (err) {
+            toast(err.message, true);
+          }
+        },
+      }, "删除"),
     ],
   });
 
@@ -2806,4 +2945,5 @@ navButtons.forEach((b) =>
   b.addEventListener("click", () => navigate(`/${b.dataset.view}`))
 );
 window.addEventListener("hashchange", render);
+preloadMeta();
 render();

@@ -5,6 +5,7 @@ its weight files are on disk under MODELS_DIR.
 """
 from __future__ import annotations
 
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -37,7 +38,17 @@ def _resolve_path(repo_id: str) -> tuple[Path | None, bool]:
     return (cache_dir if available else None), available
 
 
+# --- TTL 缓存 ---
+_catalog_cache: list[ModelOption] | None = None
+_catalog_cache_ts: float = 0.0
+_CATALOG_CACHE_TTL: float = 15.0  # 15 秒内复用
+
+
 def get_model_catalog() -> list[ModelOption]:
+    global _catalog_cache, _catalog_cache_ts
+    now = time.monotonic()
+    if _catalog_cache is not None and (now - _catalog_cache_ts) < _CATALOG_CACHE_TTL:
+        return _catalog_cache
     catalog: list[ModelOption] = []
     for entry in _registry_entries():
         repo_id = str(entry["repo_id"])
@@ -56,7 +67,16 @@ def get_model_catalog() -> list[ModelOption]:
                 download_size_label=entry.get("download_size_label"),  # type: ignore[arg-type]
             )
         )
+    _catalog_cache = catalog
+    _catalog_cache_ts = now
     return catalog
+
+
+def invalidate_model_catalog_cache() -> None:
+    """下载完成后主动失效，下次请求重新扫描磁盘。"""
+    global _catalog_cache, _catalog_cache_ts
+    _catalog_cache = None
+    _catalog_cache_ts = 0.0
 
 
 def get_model(model_id: str) -> ModelOption:

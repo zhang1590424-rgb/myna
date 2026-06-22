@@ -349,10 +349,11 @@ def _humanize_failure(stderr: str) -> str:
 # --------------------------------------------------------------------------- #
 # Engine factory
 # --------------------------------------------------------------------------- #
-def real_engine_ready() -> bool:
+def real_engine_ready(status=None) -> bool:
     from .environment import collect_environment_status
 
-    status = collect_environment_status()
+    if status is None:
+        status = collect_environment_status()
     has_model = any(model.available for model in status.model_status)
     return status.llamafactory_ok and has_model
 

@@ -122,6 +122,44 @@ class DatasetManager:
             path.unlink()
         return removed
 
+    def update_dataset(
+        self,
+        dataset_id: str,
+        filename: str,
+        content: bytes,
+        fmt: DatasetFormat,
+    ) -> DatasetUploadResult:
+        """覆盖已有数据集：用新文件替换数据，保留原 ID 和名称。"""
+        info = self.get_info(dataset_id)
+        if fmt == "dpo_pairs":
+            parsed = parse_preference_bytes(filename, content)
+        else:
+            parsed = parse_dataset_bytes(filename, content)
+        self._write_records(dataset_id, [record.model_dump() for record in parsed.records])
+        self._persist_info(
+            dataset_id=dataset_id,
+            name=info.name,
+            filename=filename,
+            fmt=fmt,
+            row_count=parsed.valid_count,
+        )
+        return DatasetUploadResult(
+            dataset_id=dataset_id,
+            name=info.name,
+            filename=filename,
+            source_format=parsed.source_format,  # type: ignore[arg-type]
+            format=fmt,
+            valid_count=parsed.valid_count,
+            skipped_count=parsed.skipped_count,
+            warnings=parsed.warnings,
+            preview=[record.model_dump(exclude_none=True) for record in parsed.preview],
+            human_summary=parsed.human_summary,
+        )
+
+    def records_path(self, dataset_id: str) -> Path:
+        """公开访问数据文件路径（用于下载）。"""
+        return self._records_path(dataset_id)
+
     # ---- helpers ---- #
     def _persist_info(
         self,

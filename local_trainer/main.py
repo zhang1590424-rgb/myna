@@ -82,7 +82,7 @@ def health() -> dict[str, str]:
 def environment():
     status = collect_environment_status()
     payload = status.model_dump()
-    ready = real_engine_ready()
+    ready = real_engine_ready(status)
     payload["engine"] = "llamafactory" if ready else "not_ready"
     payload["engine_label"] = "真实训练" if ready else "环境未就绪，暂不能训练"
     payload["can_train"] = ready
@@ -172,10 +172,37 @@ def get_dataset(dataset_id: str):
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="没有找到这个数据集。") from exc
     if info.format == "dpo_pairs":
-        preview = [record.model_dump() for record in datasets.read_preferences(dataset_id)[:5]]
+        preview = [record.model_dump() for record in datasets.read_preferences(dataset_id)[:20]]
     else:
-        preview = [record.model_dump() for record in datasets.read_records(dataset_id)[:5]]
+        preview = [record.model_dump() for record in datasets.read_records(dataset_id)[:20]]
     return {"info": info.model_dump(), "preview": preview}
+
+
+@app.put("/api/datasets/{dataset_id}")
+async def update_dataset(dataset_id: str, file: UploadFile = File(...)):
+    try:
+        info = datasets.get_info(dataset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个数据集。") from exc
+    content = await file.read()
+    filename = file.filename or info.source_filename
+    try:
+        result = datasets.update_dataset(dataset_id, filename=filename, content=content, fmt=info.format)
+    except DatasetValidationError as exc:
+        raise HTTPException(status_code=400, detail={"message": exc.message, "warnings": exc.warnings}) from exc
+    return result
+
+
+@app.get("/api/datasets/{dataset_id}/download")
+def download_dataset(dataset_id: str):
+    try:
+        info = datasets.get_info(dataset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个数据集。") from exc
+    path = datasets.records_path(dataset_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="数据文件不存在。")
+    return FileResponse(path, filename=f"{info.name}.json", media_type="application/json")
 
 
 @app.delete("/api/datasets/{dataset_id}")
@@ -325,6 +352,16 @@ def lab_history(experiment_id: str | None = None):
     if not target_id:
         return {"experiment_id": None, "results": []}
     return {"experiment_id": target_id, "results": db.list_lab_results(target_id)}
+
+
+@app.get("/api/lab/history/batch")
+def lab_history_batch(experiment_ids: str = "", limit: int = 100):
+    """一次查询多个实验的测评历史，避免前端 N+1 请求。"""
+    ids = [i.strip() for i in experiment_ids.split(",") if i.strip()]
+    if not ids:
+        return {"results": []}
+    safe_limit = max(1, min(limit, 200))
+    return {"results": db.list_lab_results_batch(ids, safe_limit)}
 
 
 @app.get("/api/lab/history/recent")
