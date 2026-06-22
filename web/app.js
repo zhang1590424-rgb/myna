@@ -1279,51 +1279,17 @@ async function renderDetail(id, { animate = true } = {}) {
     canvas.appendChild(el("p", { class: "muted" }, `${exp.message || ""} ${exp.eta ? "· 预计剩余 " + exp.eta : ""}`));
   }
 
-  // Diagnostics cards — show live_diagnostics during training, final diagnostics when completed
-  const diagCards = exp.status === "running" ? (exp.live_diagnostics || []) :
-                    exp.status === "completed" ? (exp.diagnostics || []) : [];
-  if (diagCards.length) {
-    const diagSection = el("section", { class: "detail-section diagnostics-panel" });
-    const diagTitle = exp.status === "running" ? "实时诊断" : "训练诊断";
-    diagSection.appendChild(el("div", { class: "section-label" }, diagTitle));
-    const cardList = el("div", { class: "diag-cards" });
-    for (const card of diagCards) {
-      const levelClass = card.level === "error" ? "diag-error" : card.level === "warn" ? "diag-warn" : "diag-ok";
-      const icon = card.level === "error" ? "🔴" : card.level === "warn" ? "🟡" : "🟢";
-      const cardEl = el("div", { class: `diag-card ${levelClass}` }, [
-        el("div", { class: "diag-card-header" }, [
-          el("span", { class: "diag-icon" }, icon),
-          el("span", { class: "diag-title" }, card.title),
-        ]),
-        el("div", { class: "diag-suggestion" }, card.suggestion),
-      ]);
-      if (card.evidence) {
-        const toggle = el("button", { class: "diag-evidence-toggle" }, "查看依据");
-        const evidence = el("div", { class: "diag-evidence hidden" }, card.evidence);
-        toggle.addEventListener("click", () => {
-          evidence.classList.toggle("hidden");
-          toggle.textContent = evidence.classList.contains("hidden") ? "查看依据" : "收起";
-        });
-        cardEl.appendChild(toggle);
-        cardEl.appendChild(evidence);
-      }
-      if (card.action) {
-        const actionBtn = el("button", { class: "diag-action-btn" }, card.action.label);
-        actionBtn.addEventListener("click", () => {
-          if (card.action.action === "goto_eval") {
-            navigate(`/lab/${exp.id}`);
-          } else if (card.action.action === "goto_data") {
-            navigate("/datasets");
-          } else if (card.action.action === "retrain") {
-            navigate(`/new/${exp.id}`);
-          }
-        });
-        cardEl.appendChild(actionBtn);
-      }
-      cardList.appendChild(cardEl);
-    }
-    diagSection.appendChild(cardList);
-    canvas.appendChild(diagSection);
+  // Live tip — 训练中在图表上方显示单行提示（只描述现象，不给建议）
+  const liveDiags = exp.status === "running" ? (exp.live_diagnostics || []) : [];
+  if (liveDiags.length) {
+    // 按严重程度取最重要一条：error > warn > ok
+    const priority = { error: 3, warn: 2, ok: 1 };
+    const top = liveDiags.reduce((a, b) => (priority[b.level] || 0) > (priority[a.level] || 0) ? b : a);
+    const tipIcon = top.level === "error" ? "🔴" : top.level === "warn" ? "🟡" : "🟢";
+    canvas.appendChild(el("div", { class: `live-tip live-tip-${top.level}` }, [
+      el("span", { class: "live-tip-icon" }, tipIcon),
+      el("span", { class: "live-tip-text" }, top.title),
+    ]));
   }
 
   // loss chart
@@ -1402,6 +1368,51 @@ async function renderDetail(id, { animate = true } = {}) {
     effect.appendChild(el("p", { class: "muted" }, "训练完成后这里会显示 loss 下降曲线。"));
   }
   canvas.appendChild(effect);
+
+  // 训练完成后的完整诊断模块（图表下方、笔记上方）
+  const finalDiags = exp.status === "completed" ? (exp.diagnostics || []) : [];
+  if (finalDiags.length) {
+    const diagSection = el("section", { class: "detail-section diagnostics-panel" });
+    diagSection.appendChild(el("div", { class: "section-label" }, "训练诊断"));
+    const cardList = el("div", { class: "diag-cards" });
+    for (const card of finalDiags) {
+      const levelClass = card.level === "error" ? "diag-error" : card.level === "warn" ? "diag-warn" : "diag-ok";
+      const icon = card.level === "error" ? "🔴" : card.level === "warn" ? "🟡" : "🟢";
+      const cardEl = el("div", { class: `diag-card ${levelClass}` }, [
+        el("div", { class: "diag-card-header" }, [
+          el("span", { class: "diag-icon" }, icon),
+          el("span", { class: "diag-title" }, card.title),
+        ]),
+        el("div", { class: "diag-suggestion" }, card.suggestion),
+      ]);
+      if (card.evidence) {
+        const toggle = el("button", { class: "diag-evidence-toggle" }, "查看依据");
+        const evidence = el("div", { class: "diag-evidence hidden" }, card.evidence);
+        toggle.addEventListener("click", () => {
+          evidence.classList.toggle("hidden");
+          toggle.textContent = evidence.classList.contains("hidden") ? "查看依据" : "收起";
+        });
+        cardEl.appendChild(toggle);
+        cardEl.appendChild(evidence);
+      }
+      if (card.action) {
+        const actionBtn = el("button", { class: "diag-action-btn" }, card.action.label);
+        actionBtn.addEventListener("click", () => {
+          if (card.action.action === "goto_eval") {
+            navigate(`/lab/${exp.id}`);
+          } else if (card.action.action === "goto_data") {
+            navigate("/datasets");
+          } else if (card.action.action === "retrain") {
+            navigate(`/new/${exp.id}`);
+          }
+        });
+        cardEl.appendChild(actionBtn);
+      }
+      cardList.appendChild(cardEl);
+    }
+    diagSection.appendChild(cardList);
+    canvas.appendChild(diagSection);
+  }
 
   // notes
   canvas.appendChild(el("div", { class: "section-label" }, "实验笔记"));

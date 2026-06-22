@@ -909,6 +909,23 @@ textarea.input {
   display: flex;
   flex-direction: column;
 }
+/* Live tip — 训练中图表上方的单行诊断提示 */
+.live-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  margin-bottom: 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+.live-tip-warn { background: #FBF3DB; }
+.live-tip-error { background: #FDE8E8; }
+.live-tip-ok { background: #EDF3EC; }
+.live-tip-icon { font-size: 11px; flex-shrink: 0; }
+.live-tip-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Diagnostic cards */
 .diag-cards {
   display: flex;
