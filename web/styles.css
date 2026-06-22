@@ -1598,6 +1598,12 @@ textarea.input {
   background: var(--accent-soft);
 }
 
+.dropzone.uploading {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  pointer-events: none;
+}
+
 .dropzone .pick {
   color: var(--text);
   text-decoration: underline;

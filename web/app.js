@@ -727,7 +727,7 @@ function experimentRow(exp) {
               state.experiments = await api("/api/experiments");
               state.selectedForCompare.delete(exp.id);
               renderExperiments();
-            });
+            }, e.currentTarget);
           },
         }, "删除"),
       ]),
@@ -736,14 +736,16 @@ function experimentRow(exp) {
   return row;
 }
 
-async function deleteExperiment(exp, afterDelete) {
+async function deleteExperiment(exp, afterDelete, triggerBtn) {
   if (!confirm(`删除实验「${exp.name}」？训练产物和关联测评记录也会被移除。`)) return;
+  if (triggerBtn) { triggerBtn.disabled = true; triggerBtn.textContent = "删除中…"; }
   try {
     await api(`/api/experiments/${exp.id}`, { method: "DELETE" });
     toast("已删除。");
     await afterDelete();
   } catch (err) {
     toast(err.message, true);
+    if (triggerBtn) { triggerBtn.disabled = false; triggerBtn.textContent = "删除"; }
   }
 }
 
@@ -1158,8 +1160,8 @@ async function renderDetail(id) {
       "button",
       {
         class: "btn danger",
-        onClick: async () => {
-          await deleteExperiment(exp, async () => navigate("/experiments"));
+        onClick: async (e) => {
+          await deleteExperiment(exp, async () => navigate("/experiments"), e.currentTarget);
         },
       },
       "删除"
@@ -1326,6 +1328,8 @@ async function renderDetail(id) {
   notes.value = exp.notes || "";
   const saveNotes = el("button", { class: "btn btn-sm", style: "margin-top:10px" }, "保存笔记");
   saveNotes.addEventListener("click", async () => {
+    saveNotes.disabled = true;
+    saveNotes.textContent = "保存中…";
     try {
       await api(`/api/experiments/${id}`, {
         method: "PATCH",
@@ -1336,6 +1340,8 @@ async function renderDetail(id) {
     } catch (err) {
       toast(err.message, true);
     }
+    saveNotes.disabled = false;
+    saveNotes.textContent = "保存笔记";
   });
   canvas.appendChild(notes);
   canvas.appendChild(el("div", {}, [saveNotes]));
@@ -1950,6 +1956,8 @@ function renderDatasetUpload() {
 
   async function upload(file) {
     if (!file) return;
+    drop.classList.add("uploading");
+    drop.innerHTML = '<span class="muted">上传中，请稍候…</span>';
     const fd = new FormData();
     fd.append("file", file);
     fd.append("format", selectedFormat);
@@ -1960,6 +1968,14 @@ function renderDatasetUpload() {
       navigate("/datasets");
     } catch (err) {
       toast(err.message, true);
+      drop.classList.remove("uploading");
+      drop.innerHTML = '';
+      drop.appendChild(el("span", {}, [
+        "把文件拖到这里，或 ",
+        el("span", { class: "pick", onClick: () => fileInput.click() }, "点击选择"),
+      ]));
+      drop.appendChild(el("span", { class: "dropzone-hint" }, "支持 CSV · JSON · JSONL · XLSX"));
+      drop.appendChild(fileInput);
     }
   }
   fileInput.addEventListener("change", () => upload(fileInput.files[0]));
@@ -2011,6 +2027,8 @@ function datasetRow(d) {
           onClick: async (e) => {
             e.stopPropagation();
             if (!confirm(`删除数据集「${d.name}」？`)) return;
+            const delBtn = e.currentTarget;
+            delBtn.disabled = true; delBtn.textContent = "删除中…";
             try {
               await api(`/api/datasets/${d.id}`, { method: "DELETE" });
               toast("已删除。");
@@ -2018,6 +2036,7 @@ function datasetRow(d) {
               renderDatasets();
             } catch (err) {
               toast(err.message, true);
+              delBtn.disabled = false; delBtn.textContent = "删除";
             }
           },
         },
@@ -2072,6 +2091,8 @@ async function renderDatasetDetail(id) {
   fileInput.addEventListener("change", async () => {
     const file = fileInput.files[0];
     if (!file) return;
+    const updateBtn = actions[0];
+    if (updateBtn) { updateBtn.disabled = true; updateBtn.textContent = "上传中…"; }
     const fd = new FormData();
     fd.append("file", file);
     try {
@@ -2080,6 +2101,7 @@ async function renderDatasetDetail(id) {
       await renderDatasetDetail(id);
     } catch (err) {
       toast(err.message, true);
+      if (updateBtn) { updateBtn.disabled = false; updateBtn.textContent = "更新数据"; }
     }
     fileInput.value = "";
   });
@@ -2090,14 +2112,17 @@ async function renderDatasetDetail(id) {
     el("a", { class: "btn", href: `/api/datasets/${id}/download` }, "下载"),
     el("button", {
       class: "btn danger",
-      onClick: async () => {
+      onClick: async (e) => {
         if (!confirm(`删除数据集「${info.name}」？`)) return;
+        const delBtn = e.currentTarget;
+        delBtn.disabled = true; delBtn.textContent = "删除中…";
         try {
           await api(`/api/datasets/${id}`, { method: "DELETE" });
           toast("已删除。");
           navigate("/datasets");
         } catch (err) {
           toast(err.message, true);
+          delBtn.disabled = false; delBtn.textContent = "删除";
         }
       },
     }, "删除"),
@@ -2404,11 +2429,14 @@ function labHistoryRow(item, completed, history) {
       onClick: async (e) => {
         e.stopPropagation();
         if (!confirm("删除这条测评记录？")) return;
+        const delBtn = e.currentTarget;
+        delBtn.disabled = true; delBtn.textContent = "删除中…";
         try {
           await api(`/api/lab/history/${item.id}`, { method: "DELETE" });
           await renderLab();
         } catch (err) {
           toast(err.message, true);
+          delBtn.disabled = false; delBtn.textContent = "删除";
         }
       },
     }, "删除"),
@@ -2650,14 +2678,17 @@ function renderLabDetail(item, completed, history) {
       el("button", { class: "btn primary", onClick: () => renderLabNew(completed, item.experiment_id, history) }, "＋ 新建测评"),
       el("button", {
         class: "btn danger",
-        onClick: async () => {
+        onClick: async (e) => {
           if (!confirm("删除这条测评记录？")) return;
+          const delBtn = e.currentTarget;
+          delBtn.disabled = true; delBtn.textContent = "删除中…";
           try {
             await api(`/api/lab/history/${item.id}`, { method: "DELETE" });
             toast("已删除。");
             renderLabHistoryHome(completed, await loadAllLabHistory(completed));
           } catch (err) {
             toast(err.message, true);
+            delBtn.disabled = false; delBtn.textContent = "删除";
           }
         },
       }, "删除"),
@@ -2702,14 +2733,17 @@ function renderLabChatDetail(item, completed, history) {
     actions: [
       el("button", {
         class: "btn danger",
-        onClick: async () => {
+        onClick: async (e) => {
           if (!confirm("删除这条测评记录？")) return;
+          const delBtn = e.currentTarget;
+          delBtn.disabled = true; delBtn.textContent = "删除中…";
           try {
             await api(`/api/lab/history/${item.id}`, { method: "DELETE" });
             toast("已删除。");
             renderLabHistoryHome(completed, await loadAllLabHistory(completed));
           } catch (err) {
             toast(err.message, true);
+            delBtn.disabled = false; delBtn.textContent = "删除";
           }
         },
       }, "删除"),
@@ -2908,6 +2942,8 @@ async function renderLabChat(experimentId, completed) {
   }
 
   async function handleEnd() {
+    const btn = document.getElementById("chatEnd");
+    if (btn) { btn.disabled = true; btn.textContent = "保存中…"; }
     try {
       await api("/api/lab/session/end", {
         method: "POST",
@@ -2921,6 +2957,8 @@ async function renderLabChat(experimentId, completed) {
   }
 
   async function handleRelease() {
+    const btn = document.getElementById("chatRelease");
+    if (btn) { btn.disabled = true; btn.textContent = "释放中…"; }
     try {
       await api("/api/lab/session/end", {
         method: "POST",
