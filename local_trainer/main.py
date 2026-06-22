@@ -113,6 +113,7 @@ def sample_data(template_id: str) -> Response:
     )
 
 
+
 # --------------------------------------------------------------------------- #
 # Models
 # --------------------------------------------------------------------------- #
@@ -213,6 +214,21 @@ def delete_dataset(dataset_id: str):
 
 
 # --------------------------------------------------------------------------- #
+# Pre-training diagnostics
+# --------------------------------------------------------------------------- #
+@app.get("/api/datasets/{dataset_id}/preflight")
+def preflight_check(dataset_id: str, method: str = "sft"):
+    from .diagnostics import preflight_data_check
+
+    try:
+        rows = datasets._read_rows(dataset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个数据集。") from exc
+    cards = preflight_data_check(rows, method=method)
+    return {"cards": [c.model_dump() for c in cards]}
+
+
+# --------------------------------------------------------------------------- #
 # Experiments
 # --------------------------------------------------------------------------- #
 @app.get("/api/experiments")
@@ -251,9 +267,19 @@ def compare_experiments(ids: str):
 @app.get("/api/experiments/{exp_id}")
 def get_experiment(exp_id: str):
     try:
-        return experiments.get(exp_id)
+        exp = experiments.get(exp_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="没有找到这个实验。") from exc
+    payload = exp.model_dump()
+    # Attach live diagnostics for running experiments
+    if exp.status in ("running",) and exp.loss:
+        from .diagnostics import compute_live_diagnostics
+
+        live = compute_live_diagnostics(exp)
+        payload["live_diagnostics"] = [c.model_dump() for c in live]
+    else:
+        payload["live_diagnostics"] = []
+    return payload
 
 
 @app.patch("/api/experiments/{exp_id}")

@@ -86,15 +86,52 @@ function el(tag, attrs = {}, children = []) {
   return node;
 }
 
-function clear(node) {
+function clear(node, { animate = true } = {}) {
   if (node === canvas) {
     node.classList.remove("chat-main");
-    // trigger fade-in animation on view change
-    node.classList.remove("fade-in");
-    void node.offsetWidth; // force reflow
-    node.classList.add("fade-in");
+    if (animate) {
+      // trigger fade-in animation on view change
+      node.classList.remove("fade-in");
+      void node.offsetWidth; // force reflow
+      node.classList.add("fade-in");
+    }
   }
   node.replaceChildren();
+}
+
+function showPreflightDialog(cards) {
+  return new Promise((resolve) => {
+    const overlay = el("div", { class: "preflight-overlay" });
+    const dialog = el("div", { class: "preflight-dialog" });
+    dialog.appendChild(el("div", { class: "preflight-title" }, "数据预检提示"));
+    dialog.appendChild(el("p", { class: "preflight-desc" }, "训练前检测到以下注意事项，你可以先优化数据，也可以直接继续："));
+
+    const cardList = el("div", { class: "diag-cards" });
+    for (const card of cards) {
+      const levelClass = card.level === "error" ? "diag-error" : card.level === "warn" ? "diag-warn" : "diag-ok";
+      const icon = card.level === "error" ? "🔴" : card.level === "warn" ? "🟡" : "🟢";
+      const cardEl = el("div", { class: `diag-card ${levelClass}` }, [
+        el("div", { class: "diag-card-header" }, [
+          el("span", { class: "diag-icon" }, icon),
+          el("span", { class: "diag-title" }, card.title),
+        ]),
+        el("div", { class: "diag-suggestion" }, card.suggestion),
+      ]);
+      cardList.appendChild(cardEl);
+    }
+    dialog.appendChild(cardList);
+
+    const actions = el("div", { class: "preflight-actions" });
+    const cancelBtn = el("button", { class: "btn ghost" }, "返回修改");
+    const proceedBtn = el("button", { class: "btn primary" }, "了解，继续训练");
+    cancelBtn.addEventListener("click", () => { overlay.remove(); resolve(false); });
+    proceedBtn.addEventListener("click", () => { overlay.remove(); resolve(true); });
+    actions.appendChild(cancelBtn);
+    actions.appendChild(proceedBtn);
+    dialog.appendChild(actions);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+  });
 }
 
 function buildNumericStepper({ label, min, max, step, value, hint, changedText, onChange }) {
@@ -364,7 +401,7 @@ function maybePoll() {
       try {
         state.experiments = await api("/api/experiments");
         if (parseHash().view === "experiments") {
-          renderExperiments();
+          renderExperiments({ animate: false });
         }
         refreshQueue();
       } catch {
@@ -600,8 +637,8 @@ function filteredExperiments() {
   return list;
 }
 
-function renderExperiments() {
-  clear(canvas);
+function renderExperiments({ animate = true } = {}) {
+  clear(canvas, { animate });
 
   const head = el("div", { class: "view-head" }, [
     el("div", {}, [
@@ -620,12 +657,24 @@ function renderExperiments() {
   ]);
   canvas.appendChild(head);
 
+  const filtersDiv = el("div", { class: "filters" });
+  function buildFilterBtns() {
+    filtersDiv.replaceChildren();
+    for (const [key, label] of [["all", "全部"], ["sft", "SFT"], ["dpo", "DPO"]]) {
+      filtersDiv.appendChild(el("button", {
+        class: `filter ${state.filter === key ? "active" : ""}`,
+        onClick: () => {
+          state.filter = key;
+          buildFilterBtns();
+          renderRows();
+        },
+      }, label));
+    }
+  }
+  buildFilterBtns();
+
   const toolbar = el("div", { class: "view-toolbar" }, [
-    el("div", { class: "filters" }, [
-      filterBtn("all", "全部"),
-      filterBtn("sft", "SFT"),
-      filterBtn("dpo", "DPO"),
-    ]),
+    filtersDiv,
     el("input", {
       class: "search",
       type: "search",
@@ -639,7 +688,7 @@ function renderExperiments() {
   ]);
   canvas.appendChild(toolbar);
 
-  const table = el("div", { class: "exp-table stagger" });
+  const table = el("div", { class: `exp-table${animate ? " stagger" : ""}` });
   canvas.appendChild(table);
 
   function renderRows() {
@@ -667,20 +716,6 @@ function renderExperiments() {
   renderRows();
 
   renderCompareBar();
-}
-
-function filterBtn(key, label) {
-  return el(
-    "button",
-    {
-      class: `filter ${state.filter === key ? "active" : ""}`,
-      onClick: () => {
-        state.filter = key;
-        renderExperiments();
-      },
-    },
-    label
-  );
 }
 
 function experimentRow(exp) {
@@ -1068,6 +1103,15 @@ function renderNewExperiment(cloneFromId) {
     if (!form.dataset_id) return toast("请先选一份匹配的训练数据。", true);
     startBtn.disabled = true;
     try {
+      // Pre-flight data quality check
+      const preflight = await api(`/api/datasets/${form.dataset_id}/preflight?method=${form.method}`);
+      if (preflight.cards && preflight.cards.length > 0) {
+        const proceed = await showPreflightDialog(preflight.cards);
+        if (!proceed) {
+          startBtn.disabled = false;
+          return;
+        }
+      }
       await api("/api/experiments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1107,12 +1151,12 @@ function fieldRow(label, body) {
 /* ===================================================================== *
  * VIEW: experiment detail
  * ===================================================================== */
-async function renderDetail(id) {
+async function renderDetail(id, { animate = true } = {}) {
   const exp = await api(`/api/experiments/${id}`);
   const route = parseHash();
   if (route.view !== "detail" || route.arg !== id) return;
 
-  clear(canvas);
+  clear(canvas, { animate });
   removeCompareBar();
 
   canvas.appendChild(
@@ -1235,6 +1279,53 @@ async function renderDetail(id) {
     canvas.appendChild(el("p", { class: "muted" }, `${exp.message || ""} ${exp.eta ? "· 预计剩余 " + exp.eta : ""}`));
   }
 
+  // Diagnostics cards — show live_diagnostics during training, final diagnostics when completed
+  const diagCards = exp.status === "running" ? (exp.live_diagnostics || []) :
+                    exp.status === "completed" ? (exp.diagnostics || []) : [];
+  if (diagCards.length) {
+    const diagSection = el("section", { class: "detail-section diagnostics-panel" });
+    const diagTitle = exp.status === "running" ? "实时诊断" : "训练诊断";
+    diagSection.appendChild(el("div", { class: "section-label" }, diagTitle));
+    const cardList = el("div", { class: "diag-cards" });
+    for (const card of diagCards) {
+      const levelClass = card.level === "error" ? "diag-error" : card.level === "warn" ? "diag-warn" : "diag-ok";
+      const icon = card.level === "error" ? "🔴" : card.level === "warn" ? "🟡" : "🟢";
+      const cardEl = el("div", { class: `diag-card ${levelClass}` }, [
+        el("div", { class: "diag-card-header" }, [
+          el("span", { class: "diag-icon" }, icon),
+          el("span", { class: "diag-title" }, card.title),
+        ]),
+        el("div", { class: "diag-suggestion" }, card.suggestion),
+      ]);
+      if (card.evidence) {
+        const toggle = el("button", { class: "diag-evidence-toggle" }, "查看依据");
+        const evidence = el("div", { class: "diag-evidence hidden" }, card.evidence);
+        toggle.addEventListener("click", () => {
+          evidence.classList.toggle("hidden");
+          toggle.textContent = evidence.classList.contains("hidden") ? "查看依据" : "收起";
+        });
+        cardEl.appendChild(toggle);
+        cardEl.appendChild(evidence);
+      }
+      if (card.action) {
+        const actionBtn = el("button", { class: "diag-action-btn" }, card.action.label);
+        actionBtn.addEventListener("click", () => {
+          if (card.action.action === "goto_eval") {
+            navigate(`/lab/${exp.id}`);
+          } else if (card.action.action === "goto_data") {
+            navigate("/datasets");
+          } else if (card.action.action === "retrain") {
+            navigate(`/new/${exp.id}`);
+          }
+        });
+        cardEl.appendChild(actionBtn);
+      }
+      cardList.appendChild(cardEl);
+    }
+    diagSection.appendChild(cardList);
+    canvas.appendChild(diagSection);
+  }
+
   // loss chart
   const effect = el("section", { class: "detail-section loss-panel" });
   const isRunning = ["running", "queued", "pending"].includes(exp.status);
@@ -1251,13 +1342,6 @@ async function renderDetail(id) {
       el("div", { class: "section-label", style: "margin-bottom:0" }, "训练效果"),
     ]);
     effect.appendChild(headerRow);
-    const insightText = lossInsight(exp.loss, hasEval ? exp.eval_loss : []);
-    const insightClass = insightText.startsWith("⚠️") ? "loss-insight insight-warn"
-      : insightText.startsWith("✅") ? "loss-insight insight-ok"
-      : "loss-insight";
-    effect.appendChild(
-      el("p", { class: insightClass }, insightText)
-    );
 
     // 左右双栏
     const chartNode = hasEval
@@ -1352,61 +1436,12 @@ async function renderDetail(id) {
       const route = parseHash();
       if (route.view !== "detail" || route.arg !== id) return;
       try {
-        await renderDetail(id);
+        await renderDetail(id, { animate: false });
       } catch {
         // Keep the current detail page visible if a transient refresh fails.
       }
     }, 2500);
   }
-}
-
-function lossInsight(trainLoss, valLoss = []) {
-  const train = trainLoss.filter((v) => typeof v === "number" && Number.isFinite(v));
-  const val = valLoss.filter((v) => typeof v === "number" && Number.isFinite(v));
-  if (train.length < 2) return "数据点不足，训练完成后再看趋势。";
-
-  const trainFirst = train[0];
-  const trainLast = train[train.length - 1];
-  const trainDropRatio = (trainFirst - trainLast) / trainFirst; // >0 means dropped
-  const trainDropped = trainDropRatio > 0.1; // at least 10% drop
-  const trainCollapsed = trainDropRatio > 0.75; // dropped >75%, near zero
-
-  if (val.length > 1) {
-    const valFirst = val[0];
-    const valLast = val[val.length - 1];
-    const minVal = Math.min(...val);
-    const valDropRatio = (valFirst - valLast) / valFirst;
-    const valFlat = Math.abs(valDropRatio) < 0.1; // val barely moved
-    const valRose = valLast > minVal * 1.08; // val bounced back up
-
-    // Case 1: Classic overfitting — train drops, val rises
-    if (trainDropped && valRose) {
-      return "⚠️ 过拟合：模型开始「背答案」——训练 loss 在降，但验证 loss 反而上升了。建议减少训练轮数，或增加训练数据量。";
-    }
-    // Case 2: Memorization overfitting — train collapsed to ~0, val flat
-    if (trainCollapsed && valFlat) {
-      return "⚠️ 过拟合：训练 loss 降到接近 0，但验证 loss 没有跟着降，说明模型把训练数据背住了，但没学到通用规律。建议增加训练数据量，或选择「快速」档减少训练轮数。";
-    }
-    // Case 3: Healthy — both dropping, gap reasonable
-    if (trainDropped && valLast <= valFirst && !valFlat) {
-      return "✅ 训练健康：两条线都在下降，模型在学到有效规律。可以去「试用对比」验证实际效果。";
-    }
-    // Case 4: Train dropped, val flat but train didn't collapse — mild overfitting
-    if (trainDropped && valFlat) {
-      return "⚠️ 轻度过拟合：训练 loss 在降，但验证 loss 基本没变化，模型对新数据的泛化有限。建议增加训练数据量，让模型有更多样本可学。";
-    }
-    // Case 5: Neither moved much — underfitting
-    if (!trainDropped && valFlat) {
-      return "⚠️ 欠拟合：两条线都没有明显下降，模型似乎没有学进去。建议检查数据质量，或尝试「精细」档增加训练量。";
-    }
-    // Fallback with val
-    return "训练 loss 在下降，验证 loss 走势不太典型。建议去「试用对比」看实际回答效果来判断。";
-  }
-
-  // No val loss available
-  if (trainCollapsed) return "训练 loss 降到接近 0，模型可能已记住全部训练数据。建议去「试用对比」检查实际效果，如果回答没变化，考虑增加数据量。";
-  if (trainDropped) return "训练 loss 在下降，模型正在学习这批数据的模式。训练完成后去「试用对比」验证效果。";
-  return "训练 loss 暂未明显下降，模型可能还没学进去。建议检查数据是否格式正确，或尝试增加训练轮数。";
 }
 
 /* simple inline SVG line chart for loss curves */
@@ -2004,6 +2039,7 @@ function renderDatasetUpload() {
       )
     );
   }
+
 }
 
 function datasetRow(d) {
@@ -2332,13 +2368,24 @@ function renderLabHistoryHome(completed, history) {
     state.labExperimentFilter = "all";
   }
 
+  const labFiltersDiv = el("div", { class: "filters" });
+  function buildLabFilterBtns() {
+    labFiltersDiv.replaceChildren();
+    for (const [key, label] of [["all", "全部"], ["compare", "单问对比"], ["batch", "批量测评"], ["chat", "自由对话"]]) {
+      labFiltersDiv.appendChild(el("button", {
+        class: `filter ${state.labFilter === key ? "active" : ""}`,
+        onClick: () => {
+          state.labFilter = key;
+          buildLabFilterBtns();
+          renderLabHistoryRows(list, completed, history);
+        },
+      }, label));
+    }
+  }
+  buildLabFilterBtns();
+
   const toolbar = el("div", { class: "view-toolbar" }, [
-    el("div", { class: "filters" }, [
-      labFilterBtn("all", "全部", completed, history),
-      labFilterBtn("compare", "单问对比", completed, history),
-      labFilterBtn("batch", "批量测评", completed, history),
-      labFilterBtn("chat", "自由对话", completed, history),
-    ]),
+    labFiltersDiv,
     el("select", {
       class: "search",
       onChange: (e) => {
@@ -2360,18 +2407,19 @@ function renderLabHistoryHome(completed, history) {
   renderLabHistoryRows(list, completed, history);
 
   if (history.some((item) => labResultStatus(item) === "running")) {
-    state.pollTimer = setTimeout(render, 2500);
+    const pollLabHistory = async () => {
+      try {
+        const freshHistory = await loadAllLabHistory(completed);
+        if (parseHash().view === "lab") {
+          renderLabHistoryRows(list, completed, freshHistory);
+          if (freshHistory.some((item) => labResultStatus(item) === "running")) {
+            state.pollTimer = setTimeout(pollLabHistory, 2500);
+          }
+        }
+      } catch { /* ignore */ }
+    };
+    state.pollTimer = setTimeout(pollLabHistory, 2500);
   }
-}
-
-function labFilterBtn(key, label, completed, history) {
-  return el("button", {
-    class: `filter ${state.labFilter === key ? "active" : ""}`,
-    onClick: () => {
-      state.labFilter = key;
-      renderLabHistoryHome(completed, history);
-    },
-  }, label);
 }
 
 function renderLabHistoryRows(list, completed, history) {
@@ -2652,8 +2700,8 @@ async function renderLabNew(completed, initialExperimentId, history = []) {
   paintForm();
 }
 
-function renderLabDetail(item, completed, history) {
-  clear(canvas);
+function renderLabDetail(item, completed, history, { animate = true } = {}) {
+  clear(canvas, { animate });
   if (!item) {
     renderLabHistoryHome(completed, history);
     return;
@@ -2711,7 +2759,7 @@ function renderLabDetail(item, completed, history) {
     state.pollTimer = setTimeout(async () => {
       try {
         const fresh = await api(`/api/lab/history/${item.id}`);
-        renderLabDetail(fresh, completed, await loadAllLabHistory(completed));
+        renderLabDetail(fresh, completed, await loadAllLabHistory(completed), { animate: false });
       } catch {
         render();
       }

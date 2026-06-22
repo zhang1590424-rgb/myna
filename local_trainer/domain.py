@@ -140,6 +140,24 @@ class ExperimentStatus(str, Enum):
     failed = "failed"
 
 
+class DiagnosticAction(BaseModel):
+    """Actionable button attached to a diagnostic card."""
+
+    label: str
+    action: Literal["retrain", "goto_data", "goto_eval"]
+    params: dict[str, object] = Field(default_factory=dict)
+
+
+class DiagnosticCard(BaseModel):
+    """A single diagnostic finding shown after training completes."""
+
+    level: Literal["ok", "warn", "error"]
+    title: str
+    suggestion: str
+    evidence: str | None = None
+    action: DiagnosticAction | None = None
+
+
 class Experiment(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
@@ -165,6 +183,7 @@ class Experiment(BaseModel):
     notes: str = ""
     tags: list[str] = Field(default_factory=list)
     metrics: dict[str, float] = Field(default_factory=dict)
+    diagnostics: list[DiagnosticCard] = Field(default_factory=list)
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None

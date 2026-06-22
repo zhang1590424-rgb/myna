@@ -22,6 +22,7 @@ from typing import Protocol
 import yaml
 
 from .dataset_manager import DatasetManager
+from .diagnostics import compute_diagnostics
 from .domain import Experiment, ExperimentStatus
 from .experiment_service import ExperimentService
 from .hardware import llamafactory_cli, training_env
@@ -239,6 +240,13 @@ class LlamaFactoryTrainingEngine:
                 metrics["final_loss"] = round(exp.loss[-1], 4)
                 metrics["peak_loss"] = round(max(exp.loss), 4)
 
+            # Compute diagnostics
+            try:
+                dataset_rows = self.datasets._read_rows(exp.dataset_id)
+            except (KeyError, FileNotFoundError):
+                dataset_rows = None
+            diagnostics = compute_diagnostics(exp, dataset_rows)
+
             self._discard_checkpoints(output_dir)
             changes: dict[str, object] = {
                 "status": ExperimentStatus.completed.value,
@@ -247,6 +255,7 @@ class LlamaFactoryTrainingEngine:
                 "finished_at": utc_now(),
                 "eta": None,
                 "metrics": metrics,
+                "diagnostics": [d.model_dump() for d in diagnostics],
                 "message": "训练完成，可以到测评试试它学到了什么。",
             }
             self.experiments.apply_changes(exp_id, **changes)
@@ -272,6 +281,9 @@ class LlamaFactoryTrainingEngine:
         proc = self._procs.get(exp_id)
         if proc is not None and proc.returncode is None:
             self._stopping.add(exp_id)
+            self.experiments.apply_changes(
+                exp_id, status=ExperimentStatus.stopping.value, message="正在安全停止训练"
+            )
             try:
                 proc.send_signal(signal.SIGTERM)
                 await asyncio.wait_for(proc.wait(), timeout=10)
@@ -279,9 +291,9 @@ class LlamaFactoryTrainingEngine:
                 proc.kill()
             except ProcessLookupError:
                 pass
-        return self.experiments.apply_changes(
-            exp_id, status=ExperimentStatus.stopping.value, message="正在安全停止训练"
-        )
+        # _finalize (from the background wait task) handles the final
+        # stopped/failed transition; just return current state.
+        return self.experiments.get(exp_id)
 
     async def export(self, exp_id: str, merge: bool = False) -> ExportResult:
         exp = self.experiments.get(exp_id)

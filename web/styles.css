@@ -909,23 +909,120 @@ textarea.input {
   display: flex;
   flex-direction: column;
 }
-.loss-insight {
-  font-size: 13px;
-  line-height: 1.6;
-  margin: 4px 0 14px;
-  padding: 10px 14px;
+/* Diagnostic cards */
+.diag-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.diag-card {
+  padding: 12px 16px;
   border-radius: var(--radius-sm);
-  background: var(--accent-soft);
-  color: var(--text);
+  border-left: 3px solid var(--border);
 }
-.loss-insight.insight-warn {
-  background: #FBF3DB;
-  color: #956400;
-}
-.loss-insight.insight-ok {
+.diag-card.diag-ok {
   background: #EDF3EC;
-  color: #346538;
+  border-left-color: #4a9;
 }
+.diag-card.diag-warn {
+  background: #FBF3DB;
+  border-left-color: #c90;
+}
+.diag-card.diag-error {
+  background: #FDE8E8;
+  border-left-color: #d44;
+}
+.diag-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+.diag-icon { font-size: 12px; }
+.diag-title { color: var(--text); }
+.diag-suggestion {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-muted);
+  padding-left: 20px;
+}
+.diag-evidence-toggle {
+  margin-top: 6px;
+  padding-left: 20px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.diag-evidence {
+  margin-top: 4px;
+  padding-left: 20px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.diag-evidence.hidden { display: none; }
+
+.diag-action-btn {
+  margin-top: 8px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--primary);
+  background: rgba(0, 102, 255, 0.06);
+  border: 1px solid rgba(0, 102, 255, 0.2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.diag-action-btn:hover {
+  background: rgba(0, 102, 255, 0.12);
+  border-color: var(--primary);
+}
+
+/* Preflight dialog */
+.preflight-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  animation: fadeIn 0.15s ease;
+}
+.preflight-dialog {
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 28px 32px;
+  max-width: 480px;
+  width: 90vw;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+}
+.preflight-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.preflight-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+.preflight-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+
 .loss-body {
   display: flex;
   gap: 20px;
