@@ -34,7 +34,7 @@ private func checkHealth(timeout: TimeInterval = 1.2, completion: @escaping (Boo
     }.resume()
 }
 
-private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
+private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     private let rootURL = projectRootURL()
     private var serverProcess: Process?
     private var logHandle: FileHandle?
@@ -377,6 +377,22 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         return false
     }
 
+    // target="_blank" 链接：本地 URL 在当前 webView 打开，外部 URL 用浏览器
+    func webView(
+        _ webView: WKWebView,
+        createWebViewWith configuration: WKWebViewConfiguration,
+        for navigationAction: WKNavigationAction,
+        windowFeatures: WKWindowFeatures
+    ) -> WKWebView? {
+        guard let url = navigationAction.request.url else { return nil }
+        if isLocalAppURL(url) {
+            webView.load(URLRequest(url: url))
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+        return nil
+    }
+
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
@@ -396,6 +412,44 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
             return
         }
         decisionHandler(.allow)
+    }
+
+    // 检测下载响应（Content-Disposition: attachment 或非网页 MIME）
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+    ) {
+        if let response = navigationResponse.response as? HTTPURLResponse,
+           let disposition = response.value(forHTTPHeaderField: "Content-Disposition"),
+           disposition.lowercased().contains("attachment") {
+            decisionHandler(.download)
+            return
+        }
+        if !navigationResponse.canShowMIMEType {
+            decisionHandler(.download)
+            return
+        }
+        decisionHandler(.allow)
+    }
+
+    // 导航转下载时触发
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    // WKDownloadDelegate：弹出保存面板让用户选择保存位置
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedFilename
+        panel.canCreateDirectories = true
+        panel.begin { result in
+            completionHandler(result == .OK ? panel.url : nil)
+        }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -431,6 +485,21 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         alert.addButton(withTitle: "确认")
         alert.addButton(withTitle: "取消")
         completionHandler(alert.runModal() == .alertFirstButtonReturn)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        runOpenPanelWith parameters: WKOpenPanelParameters,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping ([URL]?) -> Void
+    ) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.canChooseFiles = true
+        panel.begin { result in
+            completionHandler(result == .OK ? panel.urls : nil)
+        }
     }
 }
 

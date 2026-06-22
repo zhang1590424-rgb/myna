@@ -97,6 +97,62 @@ function clear(node) {
   node.replaceChildren();
 }
 
+function buildNumericStepper({ label, min, max, step, value, hint, changedText, onChange }) {
+  const precision = step < 1 ? String(step).split(".")[1].length : 0;
+  const clamp = (v) => {
+    const clamped = Math.min(max, Math.max(min, v));
+    return precision ? Number(clamped.toFixed(precision)) : clamped;
+  };
+
+  const range = el("input", {
+    class: "param-range",
+    type: "range",
+    min,
+    max,
+    step,
+    value,
+  });
+  const numInput = el("input", {
+    class: "input tnum param-num",
+    type: "number",
+    min,
+    max,
+    step,
+    value,
+  });
+
+  const sync = (v) => {
+    const val = clamp(v);
+    range.value = val;
+    numInput.value = val;
+    onChange(val);
+  };
+
+  range.addEventListener("input", () => sync(Number(range.value)));
+  numInput.addEventListener("input", () => {
+    const v = Number(numInput.value);
+    if (!Number.isNaN(v)) {
+      range.value = clamp(v);
+      onChange(clamp(v));
+    }
+  });
+  numInput.addEventListener("blur", () => { numInput.value = clamp(Number(numInput.value)); });
+
+  const decBtn = el("button", { class: "param-step-btn", type: "button" }, "\u2212");
+  const incBtn = el("button", { class: "param-step-btn", type: "button" }, "+");
+  decBtn.addEventListener("click", () => sync(clamp(Number(numInput.value) - step)));
+  incBtn.addEventListener("click", () => sync(clamp(Number(numInput.value) + step)));
+
+  const stepper = el("div", { class: "param-stepper" }, [decBtn, numInput, incBtn]);
+
+  const labelNode = el("label", {}, [
+    label,
+    changedText ? el("span", { class: "param-changed" }, changedText) : null,
+  ]);
+
+  return el("div", { class: "param-item" }, [labelNode, range, stepper, el("p", { class: "param-hint" }, hint)]);
+}
+
 function relativeTime(iso) {
   if (!iso) return "—";
   const then = new Date(iso).getTime();
@@ -960,28 +1016,21 @@ function renderNewExperiment(cloneFromId) {
     for (const [key, label, min, max, step, hint] of specs) {
       const changed =
         sourceParams && Number(sourceParams[key]) !== Number(form.params[key]);
-      const labelNode = el("label", {}, [
-        label,
-        changed
-          ? el("span", { class: "param-changed" }, `（原 ${sourceParams[key]}）`)
-          : null,
-      ]);
-      const input = el("input", {
-        class: "input tnum",
-        type: "number",
-        min,
-        max,
-        step,
-        value: form.params[key],
-        onInput: (e) => {
-          form.presetId = null;
-          form.params[key] = Number(e.target.value);
-          paintPresets();
-          paintAdvanced();
-        },
-      });
       paramGrid.appendChild(
-        el("div", {}, [labelNode, input, el("p", { class: "param-hint" }, hint)])
+        buildNumericStepper({
+          label,
+          min,
+          max,
+          step,
+          value: form.params[key],
+          hint,
+          changedText: changed ? `（原 ${sourceParams[key]}）` : null,
+          onChange: (v) => {
+            form.presetId = null;
+            form.params[key] = v;
+            paintPresets();
+          },
+        })
       );
     }
     advanced.appendChild(paramGrid);
@@ -2149,20 +2198,20 @@ function buildStyleControl() {
     clear(paramGrid);
     const values = currentStyleParams();
     for (const [key, label, min, max, step, hint] of LAB_PARAM_SPECS) {
-      const input = el("input", {
-        class: "input tnum",
-        type: "number",
-        min,
-        max,
-        step,
-        value: values[key],
-        onInput: (e) => {
-          state.labAdvanced[key] = Number(e.target.value);
-          paintPresets();
-        },
-      });
       paramGrid.appendChild(
-        el("div", {}, [el("label", {}, label), input, el("p", { class: "param-hint" }, hint)])
+        buildNumericStepper({
+          label,
+          min,
+          max,
+          step,
+          value: values[key],
+          hint,
+          changedText: null,
+          onChange: (v) => {
+            state.labAdvanced[key] = v;
+            paintPresets();
+          },
+        })
       );
     }
     advanced.appendChild(paramGrid);
@@ -2247,7 +2296,7 @@ function renderLabHistoryHome(completed, history) {
   clear(canvas);
   renderLabHeader({
     subtitle: "回看每次训练前后的验证结果。",
-    actions: [el("button", { class: "btn primary", onClick: () => renderLabNew(completed, completed[0].id, history) }, "新建测评")],
+    actions: [el("button", { class: "btn primary", onClick: () => renderLabNew(completed, completed[0].id, history) }, "＋ 新建测评")],
   });
 
   const experimentOptions = completed;
@@ -2598,7 +2647,7 @@ function renderLabDetail(item, completed, history) {
   renderLabHeader({
     subtitle: `${typeLabel} · ${labExperimentName(item.experiment_id)} · ${formatDateTime(item.created_at)}`,
     actions: [
-      el("button", { class: "btn primary", onClick: () => renderLabNew(completed, item.experiment_id, history) }, "新建测评"),
+      el("button", { class: "btn primary", onClick: () => renderLabNew(completed, item.experiment_id, history) }, "＋ 新建测评"),
       el("button", {
         class: "btn danger",
         onClick: async () => {

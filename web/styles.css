@@ -739,6 +739,75 @@ textarea.input {
   margin: 6px 0 0;
 }
 
+.param-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.param-range {
+  width: 100%;
+  height: 3px;
+  margin: 8px 0 8px;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--border);
+  border-radius: 2px;
+  outline: none;
+}
+.param-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  cursor: pointer;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--border);
+}
+.param-range::-webkit-slider-thumb:hover {
+  background: var(--text);
+}
+
+.param-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.param-step-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  user-select: none;
+  transition: background 0.1s, color 0.1s;
+}
+.param-step-btn:hover {
+  background: var(--border-subtle);
+  color: var(--text);
+}
+.param-step-btn:active {
+  background: var(--border);
+}
+
+.param-num {
+  width: 80px;
+  text-align: center;
+  margin: 0 6px;
+  font-size: 13px;
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;
