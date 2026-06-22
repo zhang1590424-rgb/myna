@@ -332,7 +332,7 @@ a { color: inherit; }
 
 .exp-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto;
   align-items: center;
   gap: 20px;
   padding: 15px 4px;
@@ -358,6 +358,11 @@ a { color: inherit; }
 }
 
 .exp-main { min-width: 0; }
+
+.exp-actions {
+  display: flex;
+  align-items: center;
+}
 
 .exp-name {
   display: flex;
@@ -2056,7 +2061,7 @@ textarea.input {
   .lab-head-actions { flex-wrap: wrap; width: 100%; }
   .lab-select { width: min(100%, 280px); }
   .exp-row {
-    grid-template-columns: 1fr auto;
+    grid-template-columns: 1fr auto auto;
   }
   .exp-tags { display: none; }
   .param-grid { grid-template-columns: 1fr; }

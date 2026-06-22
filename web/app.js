@@ -630,9 +630,33 @@ function experimentRow(exp) {
         el("span", { class: "exp-method" }, exp.method),
       ]),
       el("div", { class: "exp-result" }, [experimentResult(exp)]),
+      el("div", { class: "exp-actions" }, [
+        el("button", {
+          class: "btn btn-sm danger",
+          onClick: async (e) => {
+            e.stopPropagation();
+            await deleteExperiment(exp, async () => {
+              state.experiments = await api("/api/experiments");
+              state.selectedForCompare.delete(exp.id);
+              renderExperiments();
+            });
+          },
+        }, "删除"),
+      ]),
     ]
   );
   return row;
+}
+
+async function deleteExperiment(exp, afterDelete) {
+  if (!confirm(`删除实验「${exp.name}」？训练产物和关联测评记录也会被移除。`)) return;
+  try {
+    await api(`/api/experiments/${exp.id}`, { method: "DELETE" });
+    toast("已删除。");
+    await afterDelete();
+  } catch (err) {
+    toast(err.message, true);
+  }
 }
 
 function renderCompareBar() {
@@ -1054,14 +1078,7 @@ async function renderDetail(id) {
       {
         class: "btn danger",
         onClick: async () => {
-          if (!confirm("删除这个实验记录？训练产物也会被移除。")) return;
-          try {
-            await api(`/api/experiments/${id}`, { method: "DELETE" });
-            toast("已删除。");
-            navigate("/experiments");
-          } catch (err) {
-            toast(err.message, true);
-          }
+          await deleteExperiment(exp, async () => navigate("/experiments"));
         },
       },
       "删除"

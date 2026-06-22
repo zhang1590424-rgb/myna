@@ -6,6 +6,7 @@ persist progress, and queue_manager.py decides what runs when.
 """
 from __future__ import annotations
 
+import shutil
 import uuid
 from datetime import datetime, timezone
 
@@ -20,6 +21,7 @@ from .domain import (
     UpdateExperimentRequest,
 )
 from .model_registry import get_model
+from .paths import RUNS_DIR
 from .persistence import Database
 
 
@@ -107,9 +109,34 @@ class ExperimentService:
         return updated
 
     def delete(self, exp_id: str) -> bool:
-        return self.db.delete_experiment(exp_id)
+        exp = self.db.get_experiment(exp_id)
+        if exp is None:
+            return False
+        if exp.status in {
+            ExperimentStatus.pending.value,
+            ExperimentStatus.queued.value,
+            ExperimentStatus.running.value,
+            ExperimentStatus.stopping.value,
+        }:
+            raise RuntimeError("训练还在进行或排队中，请先停止后再删除。")
+        removed = self.db.delete_experiment(exp_id)
+        if removed:
+            self._delete_run_artifacts(exp)
+        return removed
 
     # ---- helpers ---- #
+    def _delete_run_artifacts(self, exp: Experiment) -> None:
+        run_root = RUNS_DIR / exp.id
+        try:
+            resolved_root = RUNS_DIR.resolve()
+            resolved_run = run_root.resolve()
+        except FileNotFoundError:
+            resolved_root = RUNS_DIR.resolve()
+            resolved_run = run_root
+        if resolved_run == resolved_root or resolved_root not in resolved_run.parents:
+            return
+        shutil.rmtree(run_root, ignore_errors=True)
+
     def _dataset_count(self, dataset_id: str) -> int:
         try:
             return self.datasets.get_info(dataset_id).row_count

@@ -256,7 +256,11 @@ async def stop_experiment(exp_id: str):
 
 @app.delete("/api/experiments/{exp_id}")
 def delete_experiment(exp_id: str):
-    if not experiments.delete(exp_id):
+    try:
+        deleted = experiments.delete(exp_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
         raise HTTPException(status_code=404, detail="没有找到这个实验。")
     return {"deleted": exp_id}
 

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from local_trainer.domain import LabResult
+from local_trainer.domain import Experiment, LabResult
 from local_trainer.persistence import Database
 
 
@@ -16,6 +16,16 @@ def _lab_result(result_id: str, created_at: str) -> LabResult:
         kind="compare",
         prompt=f"问题 {result_id}",
         created_at=created_at,
+    )
+
+
+def _experiment(exp_id: str = "exp-1") -> Experiment:
+    return Experiment(
+        id=exp_id,
+        name="实验 1",
+        model_id="qwen3-0.6b",
+        dataset_id="dataset-1",
+        created_at="2026-01-01T10:00:00",
     )
 
 
@@ -33,6 +43,21 @@ class LabResultPersistenceTests(unittest.TestCase):
                 db.close()
 
         self.assertEqual([item.id for item in results], ["new", "mid"])
+
+    def test_deleting_experiment_removes_lab_results(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db = Database(db_path=Path(temp_dir) / "workbench.db")
+            try:
+                db.upsert_experiment(_experiment())
+                db.upsert_lab_result(_lab_result("result-1", "2026-01-01T10:00:00"))
+
+                deleted = db.delete_experiment("exp-1")
+                results = db.list_lab_results("exp-1")
+            finally:
+                db.close()
+
+        self.assertTrue(deleted)
+        self.assertEqual(results, [])
 
 
 if __name__ == "__main__":

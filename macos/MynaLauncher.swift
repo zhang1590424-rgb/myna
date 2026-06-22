@@ -34,7 +34,7 @@ private func checkHealth(timeout: TimeInterval = 1.2, completion: @escaping (Boo
     }.resume()
 }
 
-private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate {
+private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private let rootURL = projectRootURL()
     private var serverProcess: Process?
     private var logHandle: FileHandle?
@@ -361,6 +361,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         let webView = WKWebView(frame: window.contentView?.bounds ?? .zero, configuration: configuration)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         window.contentView = webView
 
         mainWindow = window
@@ -400,6 +401,36 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         let pageTitle = webView.title ?? ""
         mainWindow?.title = pageTitle.isEmpty ? appName : "\(appName) - \(pageTitle)"
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        runJavaScriptAlertPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping () -> Void
+    ) {
+        let alert = NSAlert()
+        alert.messageText = appName
+        alert.informativeText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "好")
+        alert.runModal()
+        completionHandler()
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        runJavaScriptConfirmPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        let alert = NSAlert()
+        alert.messageText = appName
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "确认")
+        alert.addButton(withTitle: "取消")
+        completionHandler(alert.runModal() == .alertFirstButtonReturn)
     }
 }
 

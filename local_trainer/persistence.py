@@ -112,6 +112,7 @@ class Database:
     def delete_experiment(self, exp_id: str) -> bool:
         with self._lock:
             cur = self._conn.execute("DELETE FROM experiments WHERE id = ?", (exp_id,))
+            self._conn.execute("DELETE FROM lab_results WHERE experiment_id = ?", (exp_id,))
             self._conn.commit()
             return cur.rowcount > 0
 
