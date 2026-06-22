@@ -87,6 +87,9 @@ function el(tag, attrs = {}, children = []) {
 }
 
 function clear(node) {
+  if (node === canvas) {
+    node.classList.remove("chat-main");
+  }
   node.replaceChildren();
 }
 
@@ -2571,6 +2574,7 @@ function labResultCompareRow(item, idx, total) {
 /* ---- 自由对话界面 ---- */
 async function renderLabChat(experimentId, completed) {
   clear(canvas);
+  canvas.classList.add("chat-main");
   removeCompareBar();
 
   const exp = completed.find((e) => e.id === experimentId);
