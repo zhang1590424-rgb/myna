@@ -21,7 +21,7 @@
   --radius: 10px;
   --radius-sm: 7px;
   --sidebar-w: 240px;
-  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'SF Pro Display', system-ui, sans-serif;
+  --font: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'SF Pro Display', system-ui, sans-serif;
   --mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
   --maxw: 960px;
 }

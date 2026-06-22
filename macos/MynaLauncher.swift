@@ -1,5 +1,7 @@
 import AppKit
+import Darwin
 import Foundation
+import WebKit
 
 private let appName = "Myna"
 private let host = "127.0.0.1"
@@ -32,14 +34,21 @@ private func checkHealth(timeout: TimeInterval = 1.2, completion: @escaping (Boo
     }.resume()
 }
 
-private final class AppDelegate: NSObject, NSApplicationDelegate {
+private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate {
     private let rootURL = projectRootURL()
     private var serverProcess: Process?
     private var logHandle: FileHandle?
     private var readinessTimer: Timer?
     private var readinessAttempts = 0
-    private var openedBrowser = false
+    private var openedMainWindow = false
     private var startedByThisApp = false
+    private var adoptedServerPID: Int32?
+    private var mainWindow: NSWindow?
+    private var webView: WKWebView?
+
+    private var managesServer: Bool {
+        startedByThisApp || adoptedServerPID != nil
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -51,7 +60,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
-    // 点 Dock 图标时触发：服务活着直接开浏览器，挂了则重启
+    // 点 Dock 图标时触发：服务活着直接打开桌面窗口，挂了则重启
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         startOrOpen()
         return false
@@ -60,15 +69,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     // Dock 右键菜单
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
-        let openItem = NSMenuItem(title: "打开 Myna", action: #selector(openMyna), keyEquivalent: "")
+        let openItem = NSMenuItem(title: "打开 Myna", action: #selector(startOrOpenFromMenu), keyEquivalent: "")
         openItem.target = self
         menu.addItem(openItem)
+        let browserItem = NSMenuItem(title: "在浏览器中打开", action: #selector(openInBrowser), keyEquivalent: "")
+        browserItem.target = self
+        menu.addItem(browserItem)
         return menu
     }
 
     // 退出前检查是否有训练任务在运行
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard startedByThisApp else { return .terminateNow }
+        guard managesServer else { return .terminateNow }
 
         var request = URLRequest(url: URL(string: "http://\(host):\(port)/api/queue")!)
         request.timeoutInterval = 1.5
@@ -108,9 +120,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         readinessTimer?.invalidate()
-        if startedByThisApp, let process = serverProcess, process.isRunning {
-            process.terminate()
-        }
+        terminateManagedServer()
         try? logHandle?.close()
     }
 
@@ -120,9 +130,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(appMenuItem)
 
         let appMenu = NSMenu(title: appName)
-        let openItem = NSMenuItem(title: "打开 Myna", action: #selector(openMyna), keyEquivalent: "o")
+        let openItem = NSMenuItem(title: "打开 Myna", action: #selector(startOrOpenFromMenu), keyEquivalent: "o")
         openItem.target = self
         appMenu.addItem(openItem)
+        let browserItem = NSMenuItem(title: "在浏览器中打开", action: #selector(openInBrowser), keyEquivalent: "b")
+        browserItem.target = self
+        appMenu.addItem(browserItem)
         appMenu.addItem(.separator())
         appMenu.addItem(
             NSMenuItem(
@@ -140,6 +153,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             DispatchQueue.main.async {
                 if healthy {
+                    self.adoptExistingServerIfNeeded()
                     self.openMyna()
                     return
                 }
@@ -197,7 +211,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.readinessTimer?.invalidate()
-                if !self.openedBrowser {
+                if !self.openedMainWindow {
                     showAlert(
                         title: "Myna 启动失败",
                         message: "本地服务已退出（状态码 \(finishedProcess.terminationStatus)）。请查看 runtime/myna-app.log，或运行 scripts/doctor.command 检查环境。"
@@ -240,9 +254,152 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func startOrOpenFromMenu() {
+        startOrOpen()
+    }
+
     @objc private func openMyna() {
-        openedBrowser = true
+        openedMainWindow = true
+        showMainWindow()
+    }
+
+    @objc private func openInBrowser() {
         NSWorkspace.shared.open(appURL)
+    }
+
+    private func adoptExistingServerIfNeeded() {
+        guard !startedByThisApp, serverProcess == nil, adoptedServerPID == nil else { return }
+        adoptedServerPID = listeningServerPID()
+    }
+
+    private func listeningServerPID() -> Int32? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        process.arguments = ["-tiTCP:\(port)", "-sTCP:LISTEN"]
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+
+        guard process.terminationStatus == 0 else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: data, encoding: .utf8) ?? ""
+        return output
+            .split(whereSeparator: \.isNewline)
+            .compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .first
+    }
+
+    private func terminateManagedServer() {
+        if startedByThisApp, let process = serverProcess, process.isRunning {
+            process.terminate()
+            waitForServerToExit(pid: process.processIdentifier)
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+        }
+
+        if let pid = adoptedServerPID, isProcessAlive(pid) {
+            kill(pid, SIGTERM)
+            waitForServerToExit(pid: pid)
+            if isProcessAlive(pid) {
+                kill(pid, SIGKILL)
+            }
+        }
+    }
+
+    private func waitForServerToExit(pid: Int32) {
+        for _ in 0..<20 {
+            if !isProcessAlive(pid) || listeningServerPID() == nil {
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+    }
+
+    private func isProcessAlive(_ pid: Int32) -> Bool {
+        kill(pid, 0) == 0
+    }
+
+    private func showMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+
+        if mainWindow == nil {
+            createMainWindow()
+        }
+
+        guard let window = mainWindow, let webView else { return }
+        if webView.url == nil {
+            webView.load(URLRequest(url: appURL))
+        }
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func createMainWindow() {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default()
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = appName
+        window.center()
+        window.minSize = NSSize(width: 1024, height: 680)
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+
+        let webView = WKWebView(frame: window.contentView?.bounds ?? .zero, configuration: configuration)
+        webView.autoresizingMask = [.width, .height]
+        webView.navigationDelegate = self
+        window.contentView = webView
+
+        mainWindow = window
+        self.webView = webView
+    }
+
+    private func isLocalAppURL(_ url: URL) -> Bool {
+        url.scheme == "http" && url.host == host && url.port == port
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.allow)
+            return
+        }
+        if navigationAction.targetFrame?.isMainFrame == false || isLocalAppURL(url) {
+            decisionHandler(.allow)
+            return
+        }
+        if url.scheme == "http" || url.scheme == "https" {
+            NSWorkspace.shared.open(url)
+            decisionHandler(.cancel)
+            return
+        }
+        decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        let pageTitle = webView.title ?? ""
+        mainWindow?.title = pageTitle.isEmpty ? appName : "\(appName) - \(pageTitle)"
     }
 }
 

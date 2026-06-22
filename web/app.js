@@ -155,6 +155,10 @@ async function refreshCore() {
   state.experiments = experiments;
 }
 
+async function refreshExperiments() {
+  state.experiments = await api("/api/experiments");
+}
+
 async function ensureMeta() {
   if (state.presets.length && state.templates.length) return;
   const [presets, templates, environment] = await Promise.all([
@@ -211,9 +215,9 @@ async function render() {
 
   try {
     if (view === "home") {
-      await ensureMeta();
-      await refreshCore();
-      await renderHome();
+      await refreshExperiments();
+      renderHome();
+      refreshHomeLabHistory();
       maybePoll();
     } else if (view === "experiments") {
       await ensureMeta();
@@ -296,14 +300,14 @@ function stopPolling() {
 /* ===================================================================== *
  * VIEW: home (adaptive dashboard)
  * ===================================================================== */
-async function renderHome() {
+function renderHome() {
   clear(canvas);
   removeCompareBar();
 
   if (!state.experiments.length) {
     renderHomeEmpty();
   } else {
-    await renderHomeDashboard();
+    renderHomeDashboard();
   }
 }
 
@@ -317,10 +321,7 @@ function renderHomeEmpty() {
   canvas.appendChild(renderHomeActivityLists([], []));
 }
 
-async function renderHomeDashboard() {
-  const completed = state.experiments.filter((e) => e.status === "completed");
-  const labHistory = completed.length ? await loadAllLabHistory(completed.slice(0, 10)) : [];
-
+function renderHomeDashboard(labHistory = []) {
   canvas.appendChild(renderHomeBanner({
     title: "Myna",
     subtitle: "训练一次，看见不同",
@@ -328,6 +329,25 @@ async function renderHomeDashboard() {
 
   canvas.appendChild(renderHomeShortcuts());
   canvas.appendChild(renderHomeActivityLists(latestExperiments(state.experiments, 6), labHistory.slice(0, 6)));
+}
+
+async function refreshHomeLabHistory() {
+  const completed = state.experiments.filter((e) => e.status === "completed").slice(0, 10);
+  if (!completed.length) return;
+  let labHistory = [];
+  try {
+    const data = await api("/api/lab/history/recent?limit=6");
+    labHistory = data.results || [];
+  } catch {
+    return;
+  }
+  if (parseHash().view !== "home") return;
+  const panel = document.getElementById("homeEvaluationPanel");
+  if (!panel) return;
+  panel.replaceChildren(
+    renderHomePanelHead("测评列表"),
+    renderHomeEvaluationList(labHistory.slice(0, 6))
+  );
 }
 
 function renderHomeBanner({ title, subtitle }) {
@@ -374,7 +394,7 @@ function renderHomeActivityLists(experiments, labHistory) {
       renderHomePanelHead("训练列表"),
       renderHomeTrainingList(experiments),
     ]),
-    el("div", { class: "home-activity-panel" }, [
+    el("div", { class: "home-activity-panel", id: "homeEvaluationPanel" }, [
       renderHomePanelHead("测评列表"),
       renderHomeEvaluationList(labHistory),
     ]),

@@ -323,6 +323,12 @@ def lab_history(experiment_id: str | None = None):
     return {"experiment_id": target_id, "results": db.list_lab_results(target_id)}
 
 
+@app.get("/api/lab/history/recent")
+def lab_history_recent(limit: int = 6):
+    safe_limit = max(1, min(limit, 20))
+    return {"results": db.list_recent_lab_results(safe_limit)}
+
+
 @app.delete("/api/lab/history/{result_id}")
 def lab_history_delete(result_id: str):
     if not db.delete_lab_result(result_id):

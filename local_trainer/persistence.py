@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS lab_results (
 );
 CREATE INDEX IF NOT EXISTS idx_lab_results_exp_created
     ON lab_results(experiment_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_lab_results_created
+    ON lab_results(created_at);
 """
 
 
@@ -190,6 +192,18 @@ class Database:
                 LIMIT ?
                 """,
                 (experiment_id, limit),
+            ).fetchall()
+        return [LabResult.model_validate_json(row["data"]) for row in rows]
+
+    def list_recent_lab_results(self, limit: int = 6) -> list[LabResult]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT data FROM lab_results
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
             ).fetchall()
         return [LabResult.model_validate_json(row["data"]) for row in rows]
 
