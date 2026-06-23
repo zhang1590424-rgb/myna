@@ -109,7 +109,7 @@ function showPreflightDialog(cards) {
     const cardList = el("div", { class: "diag-cards" });
     for (const card of cards) {
       const levelClass = card.level === "error" ? "diag-error" : card.level === "warn" ? "diag-warn" : "diag-ok";
-      const icon = card.level === "error" ? "🔴" : card.level === "warn" ? "🟡" : "🟢";
+      const icon = "";
       const cardEl = el("div", { class: `diag-card ${levelClass}` }, [
         el("div", { class: "diag-card-header" }, [
           el("span", { class: "diag-icon" }, icon),
@@ -1112,7 +1112,7 @@ function renderNewExperiment(cloneFromId) {
           return;
         }
       }
-      await api("/api/experiments", {
+      const created = await api("/api/experiments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1126,7 +1126,7 @@ function renderNewExperiment(cloneFromId) {
       });
       toast("实验已创建并加入队列。");
       state.selectedForCompare.clear();
-      navigate("/experiments");
+      navigate(`/experiments/${created.id}`);
     } catch (err) {
       toast(err.message, true);
       startBtn.disabled = false;
@@ -1285,7 +1285,7 @@ async function renderDetail(id, { animate = true } = {}) {
     // 按严重程度取最重要一条：error > warn > ok
     const priority = { error: 3, warn: 2, ok: 1 };
     const top = liveDiags.reduce((a, b) => (priority[b.level] || 0) > (priority[a.level] || 0) ? b : a);
-    const tipIcon = top.level === "error" ? "🔴" : top.level === "warn" ? "🟡" : "🟢";
+    const tipIcon = "";
     canvas.appendChild(el("div", { class: `live-tip live-tip-${top.level}` }, [
       el("span", { class: "live-tip-icon" }, tipIcon),
       el("span", { class: "live-tip-text" }, top.title),
@@ -1328,31 +1328,31 @@ async function renderDetail(id, { animate = true } = {}) {
 
     // 右侧指标卡片
     const minEvalLoss = hasEval ? Math.min(...exp.eval_loss.filter(v => typeof v === "number" && Number.isFinite(v))) : null;
-    const metricsCol = el("div", { class: "loss-metrics-col" }, [
-      el("div", { class: "loss-metric-card neutral" }, [
+    const metricsRow = el("div", { class: "loss-metrics-row" }, [
+      el("div", { class: "loss-metric-item" }, [
         el("div", { class: "loss-metric-label" }, "初始 Loss"),
         el("div", { class: "loss-metric-val" }, fmtLoss(startLoss)),
       ]),
-      el("div", { class: "loss-metric-card positive" }, [
+      el("div", { class: "loss-metric-item positive" }, [
         el("div", { class: "loss-metric-label" }, "当前 Loss"),
         el("div", { class: "loss-metric-val" }, fmtLoss(currentLoss)),
       ]),
-      el("div", { class: "loss-metric-card neutral" }, [
+      el("div", { class: "loss-metric-item" }, [
         el("div", { class: "loss-metric-label" }, "总步数"),
         el("div", { class: "loss-metric-val" }, String(exp.loss.length)),
       ]),
       hasEval
-        ? el("div", { class: "loss-metric-card warn" }, [
+        ? el("div", { class: "loss-metric-item warn" }, [
             el("div", { class: "loss-metric-label" }, "验证最低"),
             el("div", { class: "loss-metric-val" }, fmtLoss(minEvalLoss)),
           ])
-        : el("div", { class: "loss-metric-card neutral" }, [
+        : el("div", { class: "loss-metric-item" }, [
             el("div", { class: "loss-metric-label" }, "下降幅度"),
             el("div", { class: "loss-metric-val" }, dropPct !== "—" ? `${dropPct}%` : "—"),
           ]),
     ]);
 
-    const body = el("div", { class: "loss-body" }, [chartCol, metricsCol]);
+    const body = el("div", { class: "loss-body" }, [chartCol, metricsRow]);
     effect.appendChild(body);
   } else if (isRunning) {
     // 训练中，数据还不够画图
@@ -1377,7 +1377,7 @@ async function renderDetail(id, { animate = true } = {}) {
     const cardList = el("div", { class: "diag-cards" });
     for (const card of finalDiags) {
       const levelClass = card.level === "error" ? "diag-error" : card.level === "warn" ? "diag-warn" : "diag-ok";
-      const icon = card.level === "error" ? "🔴" : card.level === "warn" ? "🟡" : "🟢";
+      const icon = "";
       const cardEl = el("div", { class: `diag-card ${levelClass}` }, [
         el("div", { class: "diag-card-header" }, [
           el("span", { class: "diag-icon" }, icon),
