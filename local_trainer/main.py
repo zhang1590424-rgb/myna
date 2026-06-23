@@ -5,9 +5,10 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .compare import build_comparison
 from .data_validation import DatasetValidationError
@@ -38,6 +39,19 @@ from .templates import get_template, get_templates, get_training_presets, sample
 ensure_runtime_dirs()
 
 app = FastAPI(title="个人训练工作台本地服务")
+
+
+class NoCacheStaticMiddleware(BaseHTTPMiddleware):
+    """对本地前端静态资源禁用 HTTP 缓存，确保 WKWebView 每次加载最新文件。"""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static") or request.url.path == "/":
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+
+app.add_middleware(NoCacheStaticMiddleware)
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 db = Database()

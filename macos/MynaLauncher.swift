@@ -53,7 +53,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         installMenu()
-        startOrOpen()
+        freshStart()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -160,6 +160,20 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
                 self.startServer()
             }
         }
+    }
+
+    // 冷启动（App 首次拉起）：无条件用最新代码重启后端，避免接管到加载了旧代码的常驻进程。
+    // 先终止任何占用端口的旧服务，再启动新进程。
+    private func freshStart() {
+        if let pid = listeningServerPID() {
+            kill(pid, SIGTERM)
+            waitForServerToExit(pid: pid)
+            if isProcessAlive(pid) {
+                kill(pid, SIGKILL)
+                waitForServerToExit(pid: pid)
+            }
+        }
+        startServer()
     }
 
     private func startServer() {
@@ -336,15 +350,21 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         }
 
         guard let window = mainWindow, let webView else { return }
-        if webView.url == nil {
-            webView.load(URLRequest(url: appURL))
-        }
+        // 总是重新加载，确保拿到本次重启后端提供的最新前端资源
+        webView.load(URLRequest(url: appURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30))
         window.makeKeyAndOrderFront(nil)
     }
 
     private func createMainWindow() {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
+
+        // 清掉 no-store 策略上线之前残留在磁盘上的旧前端资源缓存
+        let cacheTypes: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache]
+        configuration.websiteDataStore.removeData(
+            ofTypes: cacheTypes,
+            modifiedSince: Date(timeIntervalSince1970: 0)
+        ) {}
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
