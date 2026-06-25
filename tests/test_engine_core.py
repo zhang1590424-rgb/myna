@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 
 from local_trainer.dataset_manager import DatasetManager
+from local_trainer.diagnostics import compute_diagnostics, compute_live_diagnostics
+from local_trainer.domain import Experiment, ExperimentParams
 from local_trainer.engine import (
     LlamaFactoryTrainingEngine,
     build_engine,
@@ -96,6 +98,82 @@ class EngineFactoryTests(unittest.TestCase):
             engine = build_engine(experiments, datasets)
         self.assertIsInstance(engine, LlamaFactoryTrainingEngine)
         self.assertEqual(engine.name, "llamafactory")
+
+
+def _diagnostic_experiment(
+    *,
+    loss: list[float],
+    eval_loss: list[float] | None = None,
+    method: str = "sft",
+    epochs: int = 5,
+    dataset_count: int = 80,
+) -> Experiment:
+    return Experiment(
+        id="diag-test",
+        name="诊断测试",
+        method=method,  # type: ignore[arg-type]
+        model_id="qwen3.5-0.8b",
+        dataset_id="dataset-test",
+        dataset_count=dataset_count,
+        params=ExperimentParams(epochs=epochs),
+        loss=loss,
+        eval_loss=eval_loss or [],
+        created_at="2026-01-01T00:00:00Z",
+    )
+
+
+class DiagnosticsTests(unittest.TestCase):
+    def test_plateau_curve_gets_plain_language_ok_card(self) -> None:
+        exp = _diagnostic_experiment(
+            loss=[4.0, 3.0, 2.6, 2.3, 2.20, 2.19, 2.18]
+        )
+
+        cards = compute_diagnostics(exp)
+
+        self.assertEqual(cards[0].level, "ok")
+        self.assertIn("趋稳", cards[0].title)
+        self.assertIsNotNone(cards[0].observation)
+        self.assertIsNotNone(cards[0].interpretation)
+        self.assertIsNotNone(cards[0].next_step)
+
+    def test_rising_loss_is_primary_error(self) -> None:
+        exp = _diagnostic_experiment(loss=[2.0, 2.2, 2.5, 2.8])
+
+        cards = compute_diagnostics(exp)
+
+        self.assertEqual(cards[0].level, "error")
+        self.assertIn("往上走", cards[0].title)
+        self.assertEqual(cards[0].action.action, "retrain")
+
+    def test_overfit_is_primary_when_validation_loss_rises(self) -> None:
+        exp = _diagnostic_experiment(
+            loss=[4.0, 3.0, 2.5, 2.0],
+            eval_loss=[2.0, 1.5, 1.7],
+        )
+
+        cards = compute_diagnostics(exp)
+
+        self.assertEqual(cards[0].level, "error")
+        self.assertIn("过拟合", cards[0].title)
+        self.assertIn("验证 loss", cards[0].observation)
+
+    def test_underfit_explains_model_may_not_have_learned_much(self) -> None:
+        exp = _diagnostic_experiment(loss=[4.0, 3.95, 3.9, 3.85], epochs=5)
+
+        cards = compute_diagnostics(exp)
+
+        self.assertEqual(cards[0].level, "warn")
+        self.assertIn("没学到多少", cards[0].title)
+        self.assertIn("检查数据质量", cards[0].suggestion)
+
+    def test_live_diagnostics_uses_lightweight_process_copy(self) -> None:
+        exp = _diagnostic_experiment(loss=[2.0, 2.2, 2.5, 2.8])
+
+        cards = compute_live_diagnostics(exp)
+
+        self.assertEqual(cards[0].level, "warn")
+        self.assertIn("训练可能有点不稳", cards[0].title)
+        self.assertIsNone(cards[0].action)
 
 
 if __name__ == "__main__":

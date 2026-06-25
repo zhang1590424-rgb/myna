@@ -878,16 +878,6 @@ function renderNewExperiment(cloneFromId) {
     );
   }
 
-  if (source) {
-    page.appendChild(
-      el(
-        "div",
-        { class: "clone-hint" },
-        `以「${source.name}」为模板。改动你想变的变量，其余保持一致，方便做对照实验。`
-      )
-    );
-  }
-
   // ---- model field ----
   const modelChoices = el("div", { class: "choices" });
   function paintModels() {
@@ -1285,10 +1275,10 @@ async function renderDetail(id, { animate = true } = {}) {
     // 按严重程度取最重要一条：error > warn > ok
     const priority = { error: 3, warn: 2, ok: 1 };
     const top = liveDiags.reduce((a, b) => (priority[b.level] || 0) > (priority[a.level] || 0) ? b : a);
-    const tipIcon = "";
-    canvas.appendChild(el("div", { class: `live-tip live-tip-${top.level}` }, [
-      el("span", { class: "live-tip-icon" }, tipIcon),
-      el("span", { class: "live-tip-text" }, top.title),
+    const liveText = top.suggestion ? `${top.title}，${top.suggestion}` : top.title;
+    canvas.appendChild(el("div", { class: `process-tip process-tip-${top.level}` }, [
+      el("span", { class: "process-tip-label" }, "过程提示"),
+      el("span", { class: "process-tip-text" }, liveText),
     ]));
   }
 
@@ -1369,48 +1359,84 @@ async function renderDetail(id, { animate = true } = {}) {
   }
   canvas.appendChild(effect);
 
-  // 训练完成后的完整诊断模块（图表下方、笔记上方）
+  // 训练完成后的结果解读模块（图表下方、笔记上方）
   const finalDiags = exp.status === "completed" ? (exp.diagnostics || []) : [];
   if (finalDiags.length) {
-    const diagSection = el("section", { class: "detail-section diagnostics-panel" });
-    diagSection.appendChild(el("div", { class: "section-label" }, "训练诊断"));
-    const cardList = el("div", { class: "diag-cards" });
-    for (const card of finalDiags) {
-      const levelClass = card.level === "error" ? "diag-error" : card.level === "warn" ? "diag-warn" : "diag-ok";
-      const icon = "";
-      const cardEl = el("div", { class: `diag-card ${levelClass}` }, [
-        el("div", { class: "diag-card-header" }, [
-          el("span", { class: "diag-icon" }, icon),
-          el("span", { class: "diag-title" }, card.title),
-        ]),
-        el("div", { class: "diag-suggestion" }, card.suggestion),
+    const diagSection = el("section", { class: "detail-section result-insights" });
+    diagSection.appendChild(el("div", { class: "section-label" }, "结果解读"));
+
+    const labels = {
+      ok: "走势正常",
+      warn: "值得留意",
+      error: "建议处理",
+    };
+    const makeAction = (card) => {
+      if (!card.action) return null;
+      const actionBtn = el("button", { class: "insight-action-btn" }, card.action.label);
+      actionBtn.addEventListener("click", () => {
+        if (card.action.action === "goto_eval") {
+          navigate(`/lab/${exp.id}`);
+        } else if (card.action.action === "goto_data") {
+          navigate("/datasets");
+        } else if (card.action.action === "retrain") {
+          navigate(`/new/${exp.id}`);
+        }
+      });
+      return actionBtn;
+    };
+    const makeField = (label, text) => {
+      if (!text) return null;
+      return el("div", { class: "insight-field" }, [
+        el("div", { class: "insight-field-label" }, label),
+        el("div", { class: "insight-field-text" }, text),
       ]);
-      if (card.evidence) {
-        const toggle = el("button", { class: "diag-evidence-toggle" }, "查看依据");
-        const evidence = el("div", { class: "diag-evidence hidden" }, card.evidence);
-        toggle.addEventListener("click", () => {
-          evidence.classList.toggle("hidden");
-          toggle.textContent = evidence.classList.contains("hidden") ? "查看依据" : "收起";
-        });
-        cardEl.appendChild(toggle);
-        cardEl.appendChild(evidence);
-      }
-      if (card.action) {
-        const actionBtn = el("button", { class: "diag-action-btn" }, card.action.label);
-        actionBtn.addEventListener("click", () => {
-          if (card.action.action === "goto_eval") {
-            navigate(`/lab/${exp.id}`);
-          } else if (card.action.action === "goto_data") {
-            navigate("/datasets");
-          } else if (card.action.action === "retrain") {
-            navigate(`/new/${exp.id}`);
-          }
-        });
-        cardEl.appendChild(actionBtn);
-      }
-      cardList.appendChild(cardEl);
+    };
+
+    const [primary, ...others] = finalDiags;
+    const primaryLevel = primary.level || "warn";
+    const primaryPanel = el("div", { class: `insight-panel insight-${primaryLevel}` }, [
+      el("div", { class: "insight-head" }, [
+        el("span", { class: `insight-badge insight-badge-${primaryLevel}` }, labels[primaryLevel] || "发现"),
+        el("h2", { class: "insight-title" }, primary.title),
+      ]),
+      makeField("看到的曲线", primary.observation),
+      makeField("这代表什么", primary.interpretation),
+      makeField("可以先这样做", primary.next_step || primary.suggestion),
+    ]);
+    const actions = el("div", { class: "insight-actions" });
+    if (primary.evidence) {
+      const toggle = el("button", { class: "insight-evidence-toggle" }, "查看依据");
+      const evidence = el("div", { class: "insight-evidence hidden" }, primary.evidence);
+      toggle.addEventListener("click", () => {
+        evidence.classList.toggle("hidden");
+        toggle.textContent = evidence.classList.contains("hidden") ? "查看依据" : "收起依据";
+      });
+      actions.appendChild(toggle);
+      primaryPanel.appendChild(evidence);
     }
-    diagSection.appendChild(cardList);
+    const primaryAction = makeAction(primary);
+    if (primaryAction) actions.appendChild(primaryAction);
+    if (actions.childNodes.length) primaryPanel.appendChild(actions);
+    diagSection.appendChild(primaryPanel);
+
+    if (others.length) {
+      const otherList = el("div", { class: "insight-other-list" }, [
+        el("div", { class: "insight-other-title" }, "其他发现"),
+      ]);
+      for (const card of others) {
+        const level = card.level || "warn";
+        otherList.appendChild(
+          el("div", { class: "insight-other-item" }, [
+            el("span", { class: `insight-mini-badge insight-badge-${level}` }, labels[level] || "发现"),
+            el("div", { class: "insight-other-copy" }, [
+              el("div", { class: "insight-other-heading" }, card.title),
+              el("div", { class: "insight-other-text" }, card.next_step || card.suggestion),
+            ]),
+          ])
+        );
+      }
+      diagSection.appendChild(otherList);
+    }
     canvas.appendChild(diagSection);
   }
 

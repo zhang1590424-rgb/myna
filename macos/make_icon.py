@@ -143,7 +143,16 @@ def main() -> int:
         return 1
     master = draw_icon(1024)
     save_web_assets(master)
-    save_icns(master)
+    try:
+        save_icns(master)
+    except subprocess.CalledProcessError:
+        existing = APP_RESOURCES / "MynaIcon.icns"
+        if not existing.exists():
+            raise
+        print(
+            f"[macos-app][warn] iconutil 无法生成 icns，继续使用已有图标：{existing}",
+            file=sys.stderr,
+        )
     return 0
 
 

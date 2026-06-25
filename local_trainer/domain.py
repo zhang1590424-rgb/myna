@@ -154,8 +154,12 @@ class DiagnosticCard(BaseModel):
     level: Literal["ok", "warn", "error"]
     title: str
     suggestion: str
+    observation: str | None = None
+    interpretation: str | None = None
+    next_step: str | None = None
     evidence: str | None = None
     action: DiagnosticAction | None = None
+    rank: int = 50
 
 
 class Experiment(BaseModel):
