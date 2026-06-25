@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from local_trainer.dataset_manager import DatasetManager
 from local_trainer.diagnostics import compute_diagnostics, compute_live_diagnostics
-from local_trainer.domain import Experiment, ExperimentParams
+from local_trainer.domain import Experiment, ExperimentParams, ExperimentStatus
 from local_trainer.engine import (
     LlamaFactoryTrainingEngine,
     build_engine,
@@ -98,6 +100,96 @@ class EngineFactoryTests(unittest.TestCase):
             engine = build_engine(experiments, datasets)
         self.assertIsInstance(engine, LlamaFactoryTrainingEngine)
         self.assertEqual(engine.name, "llamafactory")
+
+
+class OrphanReconcileTests(unittest.TestCase):
+    """孤儿训练自检：跨服务重启或子进程被 kill 后能把状态扳成 failed。"""
+
+    def _build_engine(self, temp_dir: str) -> tuple[ExperimentService, LlamaFactoryTrainingEngine]:
+        db = Database(db_path=Path(temp_dir) / "workbench.db")
+        datasets = DatasetManager(db, root=Path(temp_dir) / "datasets")
+        experiments = ExperimentService(db, datasets)
+        engine = LlamaFactoryTrainingEngine(experiments, datasets, runs_dir=Path(temp_dir) / "runs")
+        return experiments, engine
+
+    def _make_running_experiment(
+        self,
+        experiments: ExperimentService,
+        *,
+        pid: int | None,
+        output_dir: Path | None,
+        started_at: str = "2026-01-01T00:00:00+00:00",
+    ) -> Experiment:
+        exp = Experiment(
+            id=os.urandom(4).hex(),
+            name="orphan-case",
+            method="sft",  # type: ignore[arg-type]
+            model_id="qwen3.5-0.8b",
+            dataset_id="dataset-test",
+            dataset_count=10,
+            params=ExperimentParams(epochs=1),
+            status=ExperimentStatus.running,
+            pid=pid,
+            output_dir=str(output_dir) if output_dir else None,
+            started_at=started_at,
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        experiments.db.upsert_experiment(exp)
+        return exp
+
+    def test_dead_pid_with_no_log_is_recovered(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            experiments, engine = self._build_engine(temp_dir)
+            exp = self._make_running_experiment(experiments, pid=999999, output_dir=None)
+
+            recovered = engine.reconcile_orphans()
+
+            self.assertEqual(recovered, [exp.id])
+            self.assertEqual(experiments.get(exp.id).status, ExperimentStatus.failed.value)
+
+    def test_stale_trainer_log_with_dead_pid_is_recovered(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            experiments, engine = self._build_engine(temp_dir)
+            output_dir = Path(temp_dir) / "out"
+            output_dir.mkdir()
+            log = output_dir / "trainer_log.jsonl"
+            log.write_text("{}", encoding="utf-8")
+            old = time.time() - 3600
+            os.utime(log, (old, old))
+            exp = self._make_running_experiment(experiments, pid=999999, output_dir=output_dir)
+
+            recovered = engine.reconcile_orphans()
+
+            self.assertEqual(recovered, [exp.id])
+            self.assertEqual(experiments.get(exp.id).status, ExperimentStatus.failed.value)
+
+    def test_fresh_trainer_log_with_live_pid_is_not_touched(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            experiments, engine = self._build_engine(temp_dir)
+            output_dir = Path(temp_dir) / "out"
+            output_dir.mkdir()
+            log = output_dir / "trainer_log.jsonl"
+            log.write_text("{}", encoding="utf-8")
+            exp = self._make_running_experiment(
+                experiments, pid=os.getpid(), output_dir=output_dir
+            )
+
+            recovered = engine.reconcile_orphans()
+
+            self.assertEqual(recovered, [])
+            self.assertEqual(experiments.get(exp.id).status, ExperimentStatus.running.value)
+
+    def test_tracked_experiments_are_skipped(self) -> None:
+        """本进程还在看管的实验不应被错误回收。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            experiments, engine = self._build_engine(temp_dir)
+            exp = self._make_running_experiment(experiments, pid=999999, output_dir=None)
+            engine._procs[exp.id] = object()  # type: ignore[assignment]
+
+            recovered = engine.reconcile_orphans()
+
+            self.assertEqual(recovered, [])
+            self.assertEqual(experiments.get(exp.id).status, ExperimentStatus.running.value)
 
 
 def _diagnostic_experiment(

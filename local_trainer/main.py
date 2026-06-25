@@ -62,14 +62,42 @@ queue = QueueManager(experiments, training_engine)
 lab = InferenceEngine(experiments)
 model_downloader = ModelDownloader()
 
+# 孤儿训练自检巡检周期（秒）
+ORPHAN_RECONCILE_INTERVAL = 30
+_orphan_task: asyncio.Task[None] | None = None
+
+
+async def _orphan_reconcile_loop() -> None:
+    """周期回收异常退出的训练实验，避免状态卡在 running 让用户无法删除。"""
+    while True:
+        try:
+            await asyncio.sleep(ORPHAN_RECONCILE_INTERVAL)
+            training_engine.reconcile_orphans()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - 自检失败不影响主服务
+            continue
+
 
 @app.on_event("startup")
 async def _startup() -> None:
+    # 服务启动时先回收一次：上次进程异常退出留下的「孤儿训练」会被扳成 failed
+    training_engine.reconcile_orphans()
     queue.start()
+    global _orphan_task
+    _orphan_task = asyncio.create_task(_orphan_reconcile_loop())
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
+    global _orphan_task
+    if _orphan_task is not None:
+        _orphan_task.cancel()
+        try:
+            await _orphan_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+        _orphan_task = None
     await queue.shutdown()
     db.close()
 

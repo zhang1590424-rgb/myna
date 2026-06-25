@@ -11,8 +11,10 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 import shutil
 import signal
+import time
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -53,6 +55,8 @@ class TrainingEngine(Protocol):
 
     async def export(self, exp_id: str, merge: bool = False) -> ExportResult: ...
 
+    def reconcile_orphans(self) -> list[str]: ...
+
 
 def parse_trainer_log(text: str) -> dict[str, object]:
     """Turn a trainer_log.jsonl body into progress/loss/eta we can show.
@@ -90,6 +94,11 @@ def parse_trainer_log(text: str) -> dict[str, object]:
 # --------------------------------------------------------------------------- #
 # Real engine
 # --------------------------------------------------------------------------- #
+# 孤儿训练自检：trainer_log.jsonl 超过这个秒数没动，且本进程不再追踪该子进程，
+# 就认为训练进程已经异常退出（OOM 等），把状态扳到 failed，让用户能正常清理。
+ORPHAN_LOG_STALE_SECONDS = 300
+
+
 class LlamaFactoryTrainingEngine:
     name = "llamafactory"
 
@@ -306,6 +315,49 @@ class LlamaFactoryTrainingEngine:
         _zip_dir(output_dir, zip_path)
         return ExportResult(path=zip_path, filename=zip_path.name, media_type="application/zip")
 
+    def reconcile_orphans(self) -> list[str]:
+        """把没人看管的「running/stopping」实验扳成 failed。
+
+        触发场景：训练子进程被系统 kill（常见 OOM），或服务重启后
+        留下上次跑到一半的实验。判定标准：本引擎不再追踪该实验的子进程，
+        且满足以下任意一条：
+          - 持久化的 pid 不存在
+          - trainer_log.jsonl 超过 ORPHAN_LOG_STALE_SECONDS 秒未更新
+        返回被回收的实验 id 列表。
+        """
+        recovered: list[str] = []
+        active_statuses = {
+            ExperimentStatus.running.value,
+            ExperimentStatus.stopping.value,
+        }
+        for exp in self.experiments.list():
+            if exp.status not in active_statuses:
+                continue
+            if exp.id in self._procs:
+                continue  # 本进程还在看管，跳过
+
+            if not self._is_orphan(exp):
+                continue
+
+            self.experiments.apply_changes(
+                exp.id,
+                status=ExperimentStatus.failed.value,
+                finished_at=utc_now(),
+                error="训练子进程异常退出（自动回收）",
+                message="训练进程已经退出，常见原因是内存不足。已自动标记为失败，可以删除或重试。",
+                eta=None,
+            )
+            recovered.append(exp.id)
+        return recovered
+
+    def _is_orphan(self, exp: Experiment) -> bool:
+        pid = exp.pid
+        if pid and _pid_alive(pid):
+            # PID 还活着但本进程没追踪，谨慎起见再看 trainer_log 是否在写。
+            if not _trainer_log_stale(exp, ORPHAN_LOG_STALE_SECONDS):
+                return False
+        return True
+
     async def _export_merged(self, exp: Experiment, output_dir: Path) -> ExportResult:
         model = get_model(exp.model_id)
         if not model.local_path:
@@ -356,6 +408,42 @@ def _humanize_failure(stderr: str) -> str:
     if "no such file" in lowered or "not found" in lowered:
         return "训练组件或模型文件缺失，请先在模型页检查。"
     return "训练中断了。常见原因是数据太少或内存不足，可减少数据或换更小的模型再试。"
+
+
+def _pid_alive(pid: int) -> bool:
+    """检测 PID 是否还存在。signal 0 不会真发信号，只做权限/存在性检查。"""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # 进程存在但不属于当前用户；保守认为还活着。
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _trainer_log_stale(exp: Experiment, stale_seconds: float) -> bool:
+    """trainer_log.jsonl 长时间不更新视为进程已经卡住或退出。"""
+    if not exp.output_dir:
+        return True
+    log_path = Path(exp.output_dir) / "trainer_log.jsonl"
+    if not log_path.exists():
+        # 日志还没写出就该重新评估；只有 started_at 已经过了阈值才认为孤儿。
+        if not exp.started_at:
+            return False
+        try:
+            started = datetime.fromisoformat(exp.started_at)
+        except ValueError:
+            return True
+        age = (datetime.now(timezone.utc) - started).total_seconds()
+        return age > stale_seconds
+    age = time.time() - log_path.stat().st_mtime
+    return age > stale_seconds
+
 
 
 # --------------------------------------------------------------------------- #
