@@ -195,22 +195,22 @@ def get_template(template_id: str) -> TemplatePreset:
 TRAINING_PRESETS: list[TrainingPreset] = [
     TrainingPreset(
         id="fast",
-        title="快速",
-        description="几分钟跑完，先体验流程、看个大概方向。",
-        params=ExperimentParams(epochs=4, learning_rate=0.0002, lora_rank=8, batch_size=2, grad_accum=2),
+        title="试跑",
+        description="先验证流程和口吻方向，不用来判断最终效果。",
+        params=ExperimentParams(epochs=3, learning_rate=0.0002, lora_rank=8, batch_size=2, grad_accum=2),
     ),
     TrainingPreset(
         id="standard",
-        title="标准",
-        description="稳妥默认，效果和耗时平衡，适合大多数情况。",
+        title="推荐",
+        description="第一次正式训练，平衡可见变化和过拟合风险。",
         recommended=True,
-        params=ExperimentParams(epochs=10, learning_rate=0.0002, lora_rank=16, batch_size=2, grad_accum=2),
+        params=ExperimentParams(epochs=8, learning_rate=0.0002, lora_rank=16, batch_size=2, grad_accum=2),
     ),
     TrainingPreset(
         id="fine",
-        title="精细",
-        description="充分训练，耗时更长，想把效果调到最好时用。",
-        params=ExperimentParams(epochs=20, learning_rate=0.0001, lora_rank=16, batch_size=2, grad_accum=2),
+        title="加强",
+        description="上次测评变化不明显时再试，数据太少别先选它。",
+        params=ExperimentParams(epochs=16, learning_rate=0.0001, lora_rank=16, batch_size=2, grad_accum=2),
     ),
 ]
 

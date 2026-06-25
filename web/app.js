@@ -928,6 +928,9 @@ function renderNewExperiment(cloneFromId) {
     const want = form.method === "dpo" ? "dpo_pairs" : "alpaca";
     return state.datasets.filter((d) => d.format === want);
   }
+  function selectedDataset() {
+    return state.datasets.find((d) => d.id === form.dataset_id) || null;
+  }
   function paintDataset() {
     clear(datasetWrap);
     const list = compatibleDatasets();
@@ -953,6 +956,7 @@ function renderNewExperiment(cloneFromId) {
         class: "input",
         onChange: (e) => {
           form.dataset_id = e.target.value;
+          paintPresetGuidance();
         },
       },
       list.map((d) =>
@@ -985,6 +989,7 @@ function renderNewExperiment(cloneFromId) {
               form.method = val;
               paintMethod();
               paintDataset();
+              paintPresetGuidance();
             },
           },
           [
@@ -1001,6 +1006,26 @@ function renderNewExperiment(cloneFromId) {
   // ---- params field (presets + advanced) ----
   const paramsWrap = el("div", {});
   const presetChoices = el("div", { class: "choices" });
+  const presetGuidance = el("p", { class: "muted" });
+  function paintPresetGuidance() {
+    const dataset = selectedDataset();
+    if (!dataset) {
+      presetGuidance.textContent = "先选训练数据，再决定训练强度。";
+      return;
+    }
+    if (dataset.row_count < 30) {
+      presetGuidance.textContent =
+        `${dataset.row_count} 条数据偏少：适合试跑流程、观察口吻或格式变化，不适合判断最终能力；先用「试跑」或「推荐」，不要一开始选「加强」。`;
+      return;
+    }
+    if (dataset.row_count >= 200) {
+      presetGuidance.textContent =
+        `${dataset.row_count} 条数据较充足：先用「推荐」建立基线，测评变化不明显时再用「加强」做对照。`;
+      return;
+    }
+    presetGuidance.textContent =
+      `${dataset.row_count} 条数据适合第一次正式训练：建议先用「推荐」，训练后到测评页看前后回答差异。`;
+  }
   function paintPresets() {
     clear(presetChoices);
     for (const p of state.presets) {
@@ -1067,7 +1092,9 @@ function renderNewExperiment(cloneFromId) {
   if (source) advanced.open = true;
 
   paramsWrap.appendChild(presetChoices);
+  paramsWrap.appendChild(presetGuidance);
   paramsWrap.appendChild(advanced);
+  paintPresetGuidance();
   page.appendChild(fieldRow("参数", paramsWrap));
 
   // ---- name field ----
