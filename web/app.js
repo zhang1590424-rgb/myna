@@ -39,8 +39,9 @@ async function api(path, options = {}) {
   const res = await fetch(path, options);
   if (!res.ok) {
     let detail = "请求失败，请稍后再试。";
+    let payload = null;
     try {
-      const payload = await res.json();
+      payload = await res.json();
       detail =
         typeof payload.detail === "string"
           ? payload.detail
@@ -48,7 +49,10 @@ async function api(path, options = {}) {
     } catch {
       detail = res.statusText || detail;
     }
-    throw new Error(detail);
+    const err = new Error(detail);
+    err.payload = payload;
+    err.warnings = payload?.detail?.warnings || [];
+    throw err;
   }
   if (res.status === 204) return null;
   const type = res.headers.get("content-type") || "";
@@ -839,9 +843,12 @@ function renderNewExperiment(cloneFromId) {
 
   // form working state
   const standard = state.presets.find((p) => p.recommended) || state.presets[0];
+  // 上传成功后跳转过来的 dataset id（只生效一次）
+  const carriedDatasetId = state.pendingDatasetId || null;
+  state.pendingDatasetId = null;
   const form = {
     model_id: source ? source.model_id : availableModels[0]?.id || null,
-    dataset_id: source ? source.dataset_id : null,
+    dataset_id: source ? source.dataset_id : carriedDatasetId,
     method: source ? source.method : "sft",
     presetId: source ? null : standard?.id,
     params: source
@@ -1298,15 +1305,16 @@ async function renderDetail(id, { animate = true } = {}) {
 
   // Live tip — 训练中在图表上方显示单行提示（只描述现象，不给建议）
   const liveDiags = exp.status === "running" ? (exp.live_diagnostics || []) : [];
+  let processTipNode = null;
   if (liveDiags.length) {
     // 按严重程度取最重要一条：error > warn > ok
     const priority = { error: 3, warn: 2, ok: 1 };
     const top = liveDiags.reduce((a, b) => (priority[b.level] || 0) > (priority[a.level] || 0) ? b : a);
     const liveText = top.suggestion ? `${top.title}，${top.suggestion}` : top.title;
-    canvas.appendChild(el("div", { class: `process-tip process-tip-${top.level}` }, [
+    processTipNode = el("div", { class: `process-tip process-tip-${top.level}` }, [
       el("span", { class: "process-tip-label" }, "过程提示"),
       el("span", { class: "process-tip-text" }, liveText),
-    ]));
+    ]);
   }
 
   // loss chart
@@ -1325,6 +1333,7 @@ async function renderDetail(id, { animate = true } = {}) {
       el("div", { class: "section-label", style: "margin-bottom:0" }, "训练效果"),
     ]);
     effect.appendChild(headerRow);
+    if (processTipNode) effect.appendChild(processTipNode);
 
     // 左右双栏
     const chartNode = hasEval
@@ -1386,84 +1395,189 @@ async function renderDetail(id, { animate = true } = {}) {
   }
   canvas.appendChild(effect);
 
-  // 训练完成后的结果解读模块（图表下方、笔记上方）
+  // 训练完成后的结果解读模块（图表下方、笔记上方）—— 诊断摘要 + 检查单
   const finalDiags = exp.status === "completed" ? (exp.diagnostics || []) : [];
   if (finalDiags.length) {
     const diagSection = el("section", { class: "detail-section result-insights" });
     diagSection.appendChild(el("div", { class: "section-label" }, "结果解读"));
 
-    const labels = {
-      ok: "走势正常",
-      warn: "值得留意",
-      error: "建议处理",
-    };
-    const makeAction = (card) => {
-      if (!card.action) return null;
-      const actionBtn = el("button", { class: "insight-action-btn" }, card.action.label);
-      actionBtn.addEventListener("click", () => {
-        if (card.action.action === "goto_eval") {
-          navigate(`/lab/${exp.id}`);
-        } else if (card.action.action === "goto_data") {
-          navigate("/datasets");
-        } else if (card.action.action === "retrain") {
-          navigate(`/new/${exp.id}`);
-        }
-      });
-      return actionBtn;
-    };
-    const makeField = (label, text) => {
-      if (!text) return null;
-      return el("div", { class: "insight-field" }, [
-        el("div", { class: "insight-field-label" }, label),
-        el("div", { class: "insight-field-text" }, text),
-      ]);
-    };
+    // 同 topic 已有 warn/error 时，对应 ok 卡冲突，去重
+    const topicsWithIssue = new Set(
+      finalDiags
+        .filter((c) => c.level === "warn" || c.level === "error")
+        .map((c) => c.topic || "general")
+    );
+    const cards = finalDiags.filter(
+      (c) => !(c.level === "ok" && topicsWithIssue.has(c.topic || "general"))
+    );
 
-    const [primary, ...others] = finalDiags;
-    const primaryLevel = primary.level || "warn";
-    const primaryPanel = el("div", { class: `insight-panel insight-${primaryLevel}` }, [
-      el("div", { class: "insight-head" }, [
-        el("span", { class: `insight-badge insight-badge-${primaryLevel}` }, labels[primaryLevel] || "发现"),
-        el("h2", { class: "insight-title" }, primary.title),
-      ]),
-      makeField("看到的曲线", primary.observation),
-      makeField("这代表什么", primary.interpretation),
-      makeField("可以先这样做", primary.next_step || primary.suggestion),
-    ]);
-    const actions = el("div", { class: "insight-actions" });
-    if (primary.evidence) {
-      const toggle = el("button", { class: "insight-evidence-toggle" }, "查看依据");
-      const evidence = el("div", { class: "insight-evidence hidden" }, primary.evidence);
-      toggle.addEventListener("click", () => {
-        evidence.classList.toggle("hidden");
-        toggle.textContent = evidence.classList.contains("hidden") ? "查看依据" : "收起依据";
-      });
-      actions.appendChild(toggle);
-      primaryPanel.appendChild(evidence);
-    }
-    const primaryAction = makeAction(primary);
-    if (primaryAction) actions.appendChild(primaryAction);
-    if (actions.childNodes.length) primaryPanel.appendChild(actions);
-    diagSection.appendChild(primaryPanel);
-
-    if (others.length) {
-      const otherList = el("div", { class: "insight-other-list" }, [
-        el("div", { class: "insight-other-title" }, "其他发现"),
-      ]);
-      for (const card of others) {
-        const level = card.level || "warn";
-        otherList.appendChild(
-          el("div", { class: "insight-other-item" }, [
-            el("span", { class: `insight-mini-badge insight-badge-${level}` }, labels[level] || "发现"),
-            el("div", { class: "insight-other-copy" }, [
-              el("div", { class: "insight-other-heading" }, card.title),
-              el("div", { class: "insight-other-text" }, card.next_step || card.suggestion),
-            ]),
-          ])
-        );
+    const topicTitles = {
+      train_loss: "训练曲线",
+      train_process: "训练过程",
+      eval_loss: "泛化判断",
+      train_eval: "训练与验证",
+      data: "数据质量",
+      dpo: "偏好学习",
+      general: "其他检查",
+    };
+    const topicSubtitles = {
+      train_loss: "train loss",
+      train_process: "process",
+      eval_loss: "eval loss",
+      train_eval: "train / eval",
+      data: "dataset",
+      dpo: "dpo",
+      general: "general",
+    };
+    const referenceSignals = [
+      "没有验证",
+      "没有拿到可解读",
+      "波动较大",
+      "比训练 loss 表现还好",
+      "数据切分",
+      "参考",
+    ];
+    const getInsightStatus = (card) => {
+      const text = [
+        card.title,
+        card.observation,
+        card.interpretation,
+        card.suggestion,
+      ].filter(Boolean).join(" ");
+      if (referenceSignals.some((s) => text.includes(s))) {
+        return "reference";
       }
-      diagSection.appendChild(otherList);
+      return card.level === "ok" ? "normal" : "abnormal";
+    };
+    const statusMeta = {
+      normal: { label: "正常", className: "normal" },
+      abnormal: { label: "异常", className: "abnormal" },
+      reference: { label: "参考", className: "reference" },
+    };
+    const buildAnalysis = (card) => {
+      const parts = [
+        card.observation,
+        card.interpretation,
+        card.mechanism,
+        card.how_to_tell,
+      ].filter(Boolean);
+      return parts.length ? parts : [card.title];
+    };
+
+    const annotatedCards = cards.map((card) => ({
+      card,
+      status: getInsightStatus(card),
+    }));
+    const abnormalCards = annotatedCards.filter((item) => item.status === "abnormal");
+    const referenceCards = annotatedCards.filter((item) => item.status === "reference");
+    const hasError = cards.some((c) => c.level === "error");
+    const summaryTitle = hasError
+      ? "先处理异常，再考虑重训"
+      : abnormalCards.length
+        ? "先去测评，重点看异常项"
+        : "先去测评，不急着重训";
+    const overallText = hasError
+      ? "训练里出现了明确异常，建议先处理最前面的异常项。"
+      : abnormalCards.length
+        ? "训练过程没有明显失败信号，但有项目可能影响最终效果。"
+        : "训练过程基本正常，没有发现明显失败信号。";
+    const riskText = abnormalCards.length
+      ? `有 ${abnormalCards.length} 项异常：${abnormalCards[0].card.title}`
+      : referenceCards.length
+        ? `有 ${referenceCards.length} 项只能作为参考，最终效果仍要看测评。`
+        : "未发现需要优先处理的风险。";
+    const nextText = hasError
+      ? "先按异常项建议处理；处理后再重新训练或测评。"
+      : abnormalCards.length
+        ? "先用真实问题测评；如果效果不满意，再按异常项建议调整。"
+        : "用训练集外的问题做前后对比，确认回答是否真的变好。";
+
+    const report = el("div", { class: "insight-report" });
+
+    // 顶部统一行动按钮（按 action 类型去重）
+    const seenActions = new Set();
+    const actions = [];
+    for (const card of cards) {
+      if (!card.action) continue;
+      const key = card.action.action;
+      if (seenActions.has(key)) continue;
+      seenActions.add(key);
+      actions.push({ key, label: card.action.label });
     }
+    const actionPriority = hasError
+      ? { goto_data: 0, retrain: 1, goto_eval: 2 }
+      : { goto_eval: 0, goto_data: 1, retrain: 2 };
+    actions.sort((a, b) => (actionPriority[a.key] ?? 9) - (actionPriority[b.key] ?? 9));
+    const actionBtns = actions.map(({ key, label }) => {
+      const btn = el("button", { class: "insight-action-btn" }, label);
+      btn.addEventListener("click", () => {
+        if (key === "goto_eval") navigate(`/lab/${exp.id}`);
+        else if (key === "goto_data") navigate("/datasets");
+        else if (key === "retrain") navigate(`/new/${exp.id}`);
+      });
+      return btn;
+    });
+
+    report.appendChild(
+      el("div", { class: "insight-summary" }, [
+        el("div", { class: "insight-summary-main" }, [
+          el("div", { class: "insight-summary-label" }, "诊断摘要"),
+          el("div", { class: "insight-summary-title" }, summaryTitle),
+        ]),
+        actionBtns.length
+          ? el("div", { class: "insight-report-actions" }, actionBtns)
+          : null,
+        el("div", { class: "insight-summary-grid" }, [
+          el("div", { class: "insight-summary-item" }, [
+            el("div", { class: "insight-summary-item-label" }, "整体结论"),
+            el("div", { class: "insight-summary-item-text" }, overallText),
+          ]),
+          el("div", { class: "insight-summary-item" }, [
+            el("div", { class: "insight-summary-item-label" }, "主要风险"),
+            el("div", { class: "insight-summary-item-text" }, riskText),
+          ]),
+          el("div", { class: "insight-summary-item" }, [
+            el("div", { class: "insight-summary-item-label" }, "下一步"),
+            el("div", { class: "insight-summary-item-text" }, nextText),
+          ]),
+        ]),
+      ])
+    );
+
+    const table = el("div", { class: "insight-checklist" }, [
+      el("div", { class: "insight-checklist-head" }, [
+        el("div", {}, "检查项目"),
+        el("div", {}, "状态"),
+        el("div", {}, "诊断分析"),
+        el("div", {}, "建议"),
+      ]),
+    ]);
+    annotatedCards.forEach(({ card, status }) => {
+      const topic = card.topic || "general";
+      const meta = statusMeta[status];
+      table.appendChild(
+        el("div", { class: `insight-check-row insight-check-row-${meta.className}` }, [
+          el("div", { class: "insight-check-topic" }, [
+            el("div", { class: "insight-check-topic-title" }, topicTitles[topic] || "其他检查"),
+            el("div", { class: "insight-check-topic-subtitle" }, topicSubtitles[topic] || topic),
+            el("div", { class: "insight-check-finding-title" }, card.title),
+          ]),
+          el("div", { class: "insight-check-status-cell" }, [
+            el("span", { class: `insight-status insight-status-${meta.className}` }, meta.label),
+          ]),
+          el("div", { class: "insight-check-analysis" }, [
+            ...buildAnalysis(card).map((text) => el("p", {}, text)),
+            card.evidence
+              ? el("p", { class: "insight-evidence-line" }, `依据：${card.evidence}`)
+              : null,
+          ]),
+          el("div", { class: "insight-check-suggestion" }, card.next_step || card.suggestion || "先看测评结果。"),
+        ])
+      );
+    });
+    report.appendChild(table);
+
+    diagSection.appendChild(report);
     canvas.appendChild(diagSection);
   }
 
@@ -1996,12 +2110,16 @@ function filteredDatasets() {
   return list;
 }
 
-/* ---- 上传数据：独立聚焦页（对齐新建实验的交互范式） ---- */
+/* ---- 上传数据：与"新建训练"对齐的草稿确认流 ---- *
+ * 上传后数据进入"草稿态"：原地展示文件元信息 + 诊断（纯文本流）+ 预览。
+ * 底部固定「取消 / 确认创建」操作栏：取消 = DELETE 已落库的草稿；
+ * 确认创建 = 跳详情；error 等级时按钮置灰，强制用户先换一份。
+ */
 function renderDatasetUpload() {
   clear(canvas);
   removeCompareBar();
 
-  const view = el("div", { class: "form-view" });
+  const view = el("div", { class: "form-view dataset-upload" });
   canvas.appendChild(view);
   view.appendChild(
     el("button", { class: "back-link", onClick: () => navigate("/datasets") }, "← 返回数据列表")
@@ -2011,13 +2129,18 @@ function renderDatasetUpload() {
   const page = el("div", { class: "form-page" });
   view.appendChild(page);
 
-  // step 1: 先选数据类型（独立先决步骤，带人话解释）
+  // 上传前：选类型 + dropzone；上传后：dropzone 折成一行 + 下方长出诊断/预览
   const formatOptions = [
     { value: "alpaca", title: "问答数据（SFT）", note: "一问一答的对话格式" },
     { value: "dpo_pairs", title: "偏好数据（DPO）", note: "同一个问题的好回答和差回答" },
   ];
   let selectedFormat = formatOptions[0].value;
+  let currentDatasetId = null;       // 上传成功后记录的 dataset_id
+  let currentTopLevel = "ok";        // 诊断等级，影响「确认创建」是否可点
 
+  // === 数据类型选择区 ===
+  const typeSection = el("div", { class: "upload-step" });
+  typeSection.appendChild(el("div", { class: "section-label" }, "数据类型"));
   const typeChoices = el("div", { class: "choices type-choices" });
   function paintTypeChoices() {
     clear(typeChoices);
@@ -2031,6 +2154,7 @@ function renderDatasetUpload() {
         ]
       );
       card.addEventListener("click", () => {
+        if (currentDatasetId) return;  // 已上传则禁止改类型
         selectedFormat = opt.value;
         paintTypeChoices();
       });
@@ -2038,45 +2162,176 @@ function renderDatasetUpload() {
     }
   }
   paintTypeChoices();
-  page.appendChild(el("div", { class: "section-label" }, "1 · 选数据类型"));
-  page.appendChild(typeChoices);
+  typeSection.appendChild(typeChoices);
+  page.appendChild(typeSection);
 
-  // step 2: 上传文件
-  page.appendChild(el("div", { class: "section-label" }, "2 · 上传文件"));
+  // === 上传区 ===
+  const uploadSection = el("div", { class: "upload-step" });
+  uploadSection.appendChild(el("div", { class: "section-label" }, "上传文件"));
   const fileInput = el("input", { type: "file", accept: ".csv,.json,.jsonl,.xlsx", hidden: true });
-  const drop = el("div", { class: "dropzone" }, [
-    el("span", {}, [
+  const drop = el("div", { class: "dropzone" });
+
+  function paintDropIdle() {
+    clear(drop);
+    drop.classList.remove("uploading", "drag", "is-replace");
+    drop.appendChild(el("span", {}, [
       "把文件拖到这里，或 ",
       el("span", { class: "pick", onClick: () => fileInput.click() }, "点击选择"),
-    ]),
-    el("span", { class: "dropzone-hint" }, "支持 CSV · JSON · JSONL · XLSX"),
-  ]);
-  drop.appendChild(fileInput);
+    ]));
+    drop.appendChild(el("span", { class: "dropzone-hint" }, "支持 CSV · JSON · JSONL · XLSX"));
+    drop.appendChild(fileInput);
+  }
+  function paintDropUploading(text = "上传中，请稍候…") {
+    clear(drop);
+    drop.classList.add("uploading");
+    drop.appendChild(el("span", { class: "muted" }, text));
+    drop.appendChild(fileInput);
+  }
+  function paintDropDone(result, formatLabel) {
+    clear(drop);
+    drop.classList.remove("uploading", "drag");
+    drop.classList.add("is-replace");
+    drop.appendChild(
+      el("div", { class: "dropzone-done" }, [
+        el("div", { class: "dropzone-done-info" }, [
+          el("span", { class: "dropzone-done-filename" }, result.filename),
+          el(
+            "span",
+            { class: "dropzone-done-meta" },
+            `${formatLabel} · ${result.valid_count} 条`
+          ),
+        ]),
+        el(
+          "button",
+          { class: "btn btn-sm ghost", type: "button", onClick: () => fileInput.click() },
+          "换一份文件"
+        ),
+      ])
+    );
+    drop.appendChild(fileInput);
+  }
+  paintDropIdle();
+  uploadSection.appendChild(drop);
+  page.appendChild(uploadSection);
+
+  // 示例数据：仅未上传时显示
+  const sampleSection = el("div", { class: "upload-step upload-samples" });
+  if (state.templates.length) {
+    sampleSection.appendChild(el("div", { class: "section-label" }, "没有数据？下载示例先跑通"));
+    sampleSection.appendChild(
+      el(
+        "div",
+        { class: "sample-links" },
+        state.templates.map((t) =>
+          el("a", { class: "btn btn-sm", href: `/api/sample-data/${t.id}` }, t.title)
+        )
+      )
+    );
+    page.appendChild(sampleSection);
+  }
+
+  // === 结果区（诊断 + 预览，原地长出）===
+  const resultMount = el("div", { class: "upload-result hidden" });
+  page.appendChild(resultMount);
+
+  // === 底部固定操作栏（与新建训练对齐）===
+  const cancelBtn = el(
+    "button",
+    {
+      class: "btn ghost",
+      type: "button",
+      onClick: async () => {
+        if (currentDatasetId) {
+          // 已落库的草稿数据：先 DELETE，再回上传初始态
+          cancelBtn.disabled = true;
+          try {
+            await api(`/api/datasets/${currentDatasetId}`, { method: "DELETE" });
+            state.datasets = await api("/api/datasets");
+          } catch {
+            // 删失败不影响离开
+          }
+        }
+        navigate("/datasets");
+      },
+    },
+    "取消"
+  );
+  const confirmBtn = el(
+    "button",
+    {
+      class: "btn primary",
+      type: "button",
+      onClick: () => {
+        if (!currentDatasetId || currentTopLevel === "error") return;
+        toast("数据已创建。");
+        navigate(`/dataset-detail/${currentDatasetId}`);
+      },
+    },
+    "确认创建 →"
+  );
+  page.appendChild(el("div", { class: "form-actions" }, [cancelBtn, confirmBtn]));
+
+  function refreshConfirmState() {
+    if (!currentDatasetId) {
+      confirmBtn.disabled = true;
+      confirmBtn.title = "上传文件后才能创建";
+    } else if (currentTopLevel === "error") {
+      confirmBtn.disabled = true;
+      confirmBtn.title = "数据存在需要先处理的问题，请换一份合规的数据";
+    } else {
+      confirmBtn.disabled = false;
+      confirmBtn.title = "";
+    }
+  }
+  refreshConfirmState();
 
   async function upload(file) {
     if (!file) return;
-    drop.classList.add("uploading");
-    drop.innerHTML = '<span class="muted">上传中，请稍候…</span>';
+    paintDropUploading(currentDatasetId ? "更新中，请稍候…" : "上传中，请稍候…");
+    clear(resultMount);
+    resultMount.classList.add("hidden");
     const fd = new FormData();
     fd.append("file", file);
-    fd.append("format", selectedFormat);
+    if (!currentDatasetId) fd.append("format", selectedFormat);
     try {
-      const result = await api("/api/datasets", { method: "POST", body: fd });
-      toast(result.human_summary || "数据集已上传。");
+      const path = currentDatasetId
+        ? `/api/datasets/${currentDatasetId}`
+        : "/api/datasets";
+      const method = currentDatasetId ? "PUT" : "POST";
+      const result = await api(path, { method, body: fd });
       state.datasets = await api("/api/datasets");
-      navigate("/datasets");
+      currentDatasetId = result.dataset_id;
+      const flagged = [
+        ...(result.diagnostics || []).filter((c) => c.level !== "ok"),
+        ...((result.warnings || []).map(() => ({ level: "warn" }))),
+      ];
+      currentTopLevel = flagged.some((c) => c.level === "error")
+        ? "error"
+        : flagged.length
+        ? "warn"
+        : "ok";
+      const formatLabel = result.format === "dpo_pairs" ? "偏好 DPO" : "问答 SFT";
+      paintDropDone(result, formatLabel);
+      sampleSection.classList.add("hidden");
+      renderUploadResultInto(resultMount, result);
+      refreshConfirmState();
     } catch (err) {
-      toast(err.message, true);
-      drop.classList.remove("uploading");
-      drop.innerHTML = '';
-      drop.appendChild(el("span", {}, [
-        "把文件拖到这里，或 ",
-        el("span", { class: "pick", onClick: () => fileInput.click() }, "点击选择"),
-      ]));
-      drop.appendChild(el("span", { class: "dropzone-hint" }, "支持 CSV · JSON · JSONL · XLSX"));
-      drop.appendChild(fileInput);
+      currentTopLevel = "error";
+      renderUploadErrorInto(resultMount, err, Boolean(currentDatasetId));
+      if (currentDatasetId) {
+        paintDropDone(
+          { filename: "（已保存的旧文件）", valid_count: "—" },
+          selectedFormat === "dpo_pairs" ? "偏好 DPO" : "问答 SFT"
+        );
+      } else {
+        paintDropIdle();
+      }
+      refreshConfirmState();
+    } finally {
+      fileInput.value = "";
     }
   }
+
   fileInput.addEventListener("change", () => upload(fileInput.files[0]));
   drop.addEventListener("dragover", (e) => {
     e.preventDefault();
@@ -2088,22 +2343,255 @@ function renderDatasetUpload() {
     drop.classList.remove("drag");
     upload(e.dataTransfer.files[0]);
   });
-  page.appendChild(drop);
+}
 
-  // 示例数据下载：上传场景下作为兜底入口
-  if (state.templates.length) {
-    page.appendChild(el("div", { class: "section-label" }, "没有数据？下载示例先跑通"));
-    page.appendChild(
-      el(
-        "div",
-        { class: "sample-links" },
-        state.templates.map((t) =>
-          el("a", { class: "btn btn-sm", href: `/api/sample-data/${t.id}` }, t.title)
-        )
-      )
+/* 把"上传结果"渲染进给定容器：数据检查 + 预览。
+ * 不再有状态条容器、不再有行内按钮——主操作集中到页面底部的「确认创建」。
+ */
+function renderUploadResultInto(mount, result) {
+  clear(mount);
+  mount.classList.remove("hidden");
+
+  const diagnostics = Array.isArray(result.diagnostics) ? result.diagnostics : [];
+  const warningCards = (result.warnings || []).map((w) => buildUploadWarningCard(w));
+  const allCards = [...diagnostics, ...warningCards];
+  const flagged = allCards.filter((c) => c.level !== "ok");
+  const topLevel = flagged.some((c) => c.level === "error")
+    ? "error"
+    : flagged.length
+    ? "warn"
+    : "ok";
+
+  // 预览表（先建好，便于诊断行号 chip 联动）
+  const previewRows = Array.isArray(result.preview) ? result.preview : [];
+  const previewTable = buildPreviewTable(previewRows);
+
+  if (flagged.length) {
+    appendUploadCheck(
+      mount,
+      renderDiagFlow(allCards, flagged, topLevel, result, previewTable)
     );
   }
 
+  // 数据预览
+  if (previewTable) {
+    const previewBlock = el("div", { class: "upload-preview" });
+    previewBlock.appendChild(
+      el("div", { class: "section-label" }, `数据预览（前 ${previewRows.length} 条）`)
+    );
+    previewBlock.appendChild(previewTable);
+    mount.appendChild(previewBlock);
+  }
+}
+
+function renderUploadErrorInto(mount, err, hasSavedDraft) {
+  clear(mount);
+  mount.classList.remove("hidden");
+
+  const warnings = Array.isArray(err?.warnings) ? err.warnings : [];
+  const cards = [
+    {
+      level: "error",
+      title: err?.message || "文件没有通过数据检查。",
+      suggestion: hasSavedDraft
+        ? "新文件没有保存，下面不会继续展示旧文件的检查结果。请按提示修改后重新上传。"
+        : "请按提示修改文件后重新上传。",
+      topic: "data",
+    },
+    ...warnings.map((w) => buildUploadWarningCard(w)),
+  ];
+  const flagged = cards.filter((c) => c.level !== "ok");
+  const summary = `数据检查未通过，有 ${flagged.length} 个问题需要先处理。`;
+
+  appendUploadCheck(
+    mount,
+    renderDiagFlow(
+      cards,
+      flagged,
+      "error",
+      { check_summary: summary },
+      null
+    )
+  );
+}
+
+function appendUploadCheck(mount, flow) {
+  mount.appendChild(
+    el("div", { class: "upload-check" }, [
+      el("div", { class: "section-label" }, "数据检查"),
+      flow,
+    ])
+  );
+}
+
+function buildUploadWarningCard(text) {
+  return {
+    level: "warn",
+    title: text,
+    suggestion: "这一行不会进入训练，请补齐后重新上传。",
+    topic: "data",
+  };
+}
+
+/* 诊断流：一句话总结 + 诊断卡片列表。
+ * 卡片样式对齐全局 preflight 弹窗的 .diag-card（圆点 + 标题 + 柔和色块 + 副文本），
+ * 额外挂上行号联动与「为什么」折叠。
+ */
+function renderDiagFlow(allCards, flagged, topLevel, result, previewTable) {
+  const wrap = el("div", { class: `diag-flow diag-flow-${topLevel}` });
+  wrap.appendChild(
+    el("div", { class: "diag-flow-summary" }, buildDiagSummary(topLevel, result, flagged))
+  );
+  if (flagged.length) {
+    const cards = el("div", { class: "diag-cards" });
+    for (const card of flagged) cards.appendChild(buildDiagCard(card, previewTable));
+    wrap.appendChild(cards);
+  }
+  return wrap;
+}
+
+function buildDiagSummary(level, result, flagged) {
+  if (result?.check_summary) return result.check_summary;
+  const count = result.valid_count;
+  if (level === "ok") return `数据可以创建，共 ${count} 条数据，没有发现明显问题。`;
+  if (level === "warn") return `数据可以创建，共 ${count} 条数据，有 ${flagged.length} 个地方建议优化。`;
+  const errCount = flagged.filter((c) => c.level === "error").length;
+  return `数据检查未通过，共 ${count} 条数据，有 ${errCount} 个问题需要先处理。`;
+}
+
+/* 单张诊断卡片：复用全局 .diag-card 视觉，圆点表示等级。 */
+function buildDiagCard(card, previewTable) {
+  const level = card.level || "warn";
+  const levelClass = level === "error" ? "diag-error" : level === "warn" ? "diag-warn" : "diag-ok";
+  const cardEl = el("div", { class: `diag-card ${levelClass}` });
+
+  cardEl.appendChild(
+    el("div", { class: "diag-card-header" }, [
+      el("span", { class: "diag-icon" }),
+      el("span", { class: "diag-title" }, card.title),
+    ])
+  );
+
+  if (card.suggestion) {
+    cardEl.appendChild(el("div", { class: "diag-suggestion" }, card.suggestion));
+  }
+
+  // 元信息行：行号 + 「为什么」，统一缩进对齐标题文字
+  const lineNumbers = card.evidence ? extractLineNumbers(card.evidence) : [];
+  const why = card.interpretation || card.mechanism;
+  if (lineNumbers.length || why) {
+    const meta = el("div", { class: "diag-card-meta" });
+
+    if (lineNumbers.length) {
+      const lines = el("span", { class: "diag-lines" });
+      lines.appendChild(el("span", { class: "diag-lines-label" }, "行号"));
+      const shown = lineNumbers.slice(0, 10);
+      for (const n of shown) {
+        if (previewTable) {
+          const chip = el("button", { class: "diag-line-chip", type: "button" }, String(n));
+          chip.addEventListener("click", () => highlightPreviewRow(previewTable, n));
+          lines.appendChild(chip);
+        } else {
+          lines.appendChild(el("span", { class: "diag-line-chip is-static" }, String(n)));
+        }
+      }
+      if (lineNumbers.length > shown.length) {
+        lines.appendChild(el("span", { class: "diag-line-more" }, `+${lineNumbers.length - shown.length}`));
+      }
+      meta.appendChild(lines);
+    }
+
+    if (why) {
+      const toggle = el("button", { class: "diag-why-toggle", type: "button" }, "为什么");
+      const detail = el("div", { class: "diag-why hidden" }, why);
+      toggle.addEventListener("click", () => {
+        const open = detail.classList.toggle("hidden");
+        toggle.textContent = open ? "为什么" : "收起";
+      });
+      meta.appendChild(toggle);
+      cardEl.appendChild(meta);
+      cardEl.appendChild(detail);
+    } else {
+      cardEl.appendChild(meta);
+    }
+  }
+
+  return cardEl;
+}
+
+/* ---------- 诊断流（详情页用，无 result.valid_count 上下文） ---------- */
+function renderDiagFlowForDetail(cards, previewTable) {
+  const flagged = cards.filter((c) => c.level !== "ok");
+  if (!flagged.length) {
+    return el("div", { class: "diag-flow diag-flow-ok" }, [
+      el("div", { class: "diag-flow-summary" }, "数据体检通过，没有发现问题。"),
+    ]);
+  }
+  const topLevel = flagged.some((c) => c.level === "error") ? "error" : "warn";
+  const summary =
+    topLevel === "error"
+      ? `发现 ${flagged.filter((c) => c.level === "error").length} 处需要先处理：`
+      : `发现 ${flagged.length} 处可以优化的地方：`;
+  const wrap = el("div", { class: `diag-flow diag-flow-${topLevel}` });
+  wrap.appendChild(el("div", { class: "diag-flow-summary" }, summary));
+  const cardList = el("div", { class: "diag-cards" });
+  for (const card of flagged) cardList.appendChild(buildDiagCard(card, previewTable));
+  wrap.appendChild(cardList);
+  return wrap;
+}
+
+function extractLineNumbers(text) {
+  if (!text) return [];
+  // 匹配「第 5、12、18 行」「涉及第 3 行」等
+  const nums = [];
+  const re = /\d+/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const n = parseInt(m[0], 10);
+    if (!Number.isNaN(n) && n > 0 && n < 100000) nums.push(n);
+  }
+  // 去重并保留顺序
+  return [...new Set(nums)];
+}
+
+function buildPreviewTable(rows) {
+  if (!rows || !rows.length) return null;
+  const cols = Object.keys(rows[0]);
+  // 表头是第 1 行，数据从第 2 行起。每行 data-line 用于诊断 chip 跳转。
+  const tbody = el("tbody", {});
+  rows.forEach((r, idx) => {
+    const lineNum = idx + 2;
+    const tr = el(
+      "tr",
+      { "data-line": String(lineNum) },
+      [
+        el("td", { class: "preview-line-col" }, String(lineNum)),
+        ...cols.map((c) => el("td", {}, String(r[c] ?? ""))),
+      ]
+    );
+    tbody.appendChild(tr);
+  });
+  return el("table", { class: "preview-table preview-table-numbered" }, [
+    el("thead", {}, [
+      el("tr", {}, [
+        el("th", { class: "preview-line-col" }, "行"),
+        ...cols.map((c) => el("th", {}, c)),
+      ]),
+    ]),
+    tbody,
+  ]);
+}
+
+function highlightPreviewRow(table, lineNumber) {
+  if (!table) return;
+  const target = table.querySelector(`tr[data-line="${lineNumber}"]`);
+  if (!target) return;
+  // 清除旧高亮
+  for (const tr of table.querySelectorAll("tr.is-highlight")) {
+    tr.classList.remove("is-highlight");
+  }
+  target.classList.add("is-highlight");
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function datasetRow(d) {
@@ -2242,19 +2730,27 @@ async function renderDatasetDetail(id) {
     ])
   );
 
-  // 数据预览表格
+  // 数据预览表格（先建好，以便诊断行号 chip 联动）
+  let previewTable = null;
   if (rows.length) {
+    previewTable = buildPreviewTable(rows);
+  }
+
+  // 诊断挂载点：先占位、后台拉取，避免阻塞数据预览渲染
+  const diagMount = el("div", { class: "data-diag-mount" });
+  canvas.appendChild(diagMount);
+  api(`/api/datasets/${id}/diagnostics`)
+    .then((res) => {
+      const cards = (res && res.cards) || [];
+      if (!cards.length) { diagMount.remove(); return; }
+      diagMount.replaceWith(renderDiagFlowForDetail(cards, previewTable));
+    })
+    .catch(() => { diagMount.remove(); });
+
+  // 渲染预览
+  if (previewTable) {
     canvas.appendChild(el("div", { class: "section-label" }, `数据预览（前 ${rows.length} 条）`));
-    const cols = Object.keys(rows[0]);
-    const table = el("table", { class: "preview-table" }, [
-      el("thead", {}, [el("tr", {}, cols.map((c) => el("th", {}, c)))]),
-      el(
-        "tbody",
-        {},
-        rows.map((r) => el("tr", {}, cols.map((c) => el("td", {}, String(r[c] ?? "")))))
-      ),
-    ]);
-    canvas.appendChild(table);
+    canvas.appendChild(previewTable);
   } else {
     canvas.appendChild(el("div", { class: "empty" }, [el("p", { class: "empty-title" }, "这份数据没有可预览的内容")]));
   }

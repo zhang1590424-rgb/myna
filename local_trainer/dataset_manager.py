@@ -16,6 +16,7 @@ from .data_validation import (
     parse_dataset_bytes,
     parse_preference_bytes,
 )
+from .dataset_diagnostics import diagnose_alpaca_rows, diagnose_dpo_rows
 from .domain import (
     DatasetFormat,
     DatasetInfo,
@@ -48,7 +49,8 @@ class DatasetManager:
     def _save_alpaca(self, filename: str, content: bytes, name: str | None) -> DatasetUploadResult:
         parsed = parse_dataset_bytes(filename, content)
         dataset_id = uuid.uuid4().hex
-        self._write_records(dataset_id, [record.model_dump() for record in parsed.records])
+        rows_dump = [record.model_dump() for record in parsed.records]
+        self._write_records(dataset_id, rows_dump)
         info = self._persist_info(
             dataset_id=dataset_id,
             name=name or self._default_name(filename),
@@ -67,12 +69,14 @@ class DatasetManager:
             warnings=parsed.warnings,
             preview=[record.model_dump(exclude_none=True) for record in parsed.preview],
             human_summary=parsed.human_summary,
+            diagnostics=diagnose_alpaca_rows(rows_dump),
         )
 
     def _save_preference(self, filename: str, content: bytes, name: str | None) -> DatasetUploadResult:
         parsed = parse_preference_bytes(filename, content)
         dataset_id = uuid.uuid4().hex
-        self._write_records(dataset_id, [record.model_dump() for record in parsed.records])
+        rows_dump = [record.model_dump() for record in parsed.records]
+        self._write_records(dataset_id, rows_dump)
         info = self._persist_info(
             dataset_id=dataset_id,
             name=name or self._default_name(filename),
@@ -91,6 +95,7 @@ class DatasetManager:
             warnings=parsed.warnings,
             preview=[record.model_dump(exclude_none=True) for record in parsed.preview],
             human_summary=parsed.human_summary,
+            diagnostics=diagnose_dpo_rows(rows_dump),
         )
 
     # ---- read ---- #
@@ -135,13 +140,17 @@ class DatasetManager:
             parsed = parse_preference_bytes(filename, content)
         else:
             parsed = parse_dataset_bytes(filename, content)
-        self._write_records(dataset_id, [record.model_dump() for record in parsed.records])
+        rows_dump = [record.model_dump() for record in parsed.records]
+        self._write_records(dataset_id, rows_dump)
         self._persist_info(
             dataset_id=dataset_id,
             name=info.name,
             filename=filename,
             fmt=fmt,
             row_count=parsed.valid_count,
+        )
+        diagnostics = (
+            diagnose_dpo_rows(rows_dump) if fmt == "dpo_pairs" else diagnose_alpaca_rows(rows_dump)
         )
         return DatasetUploadResult(
             dataset_id=dataset_id,
@@ -154,11 +163,20 @@ class DatasetManager:
             warnings=parsed.warnings,
             preview=[record.model_dump(exclude_none=True) for record in parsed.preview],
             human_summary=parsed.human_summary,
+            diagnostics=diagnostics,
         )
 
     def records_path(self, dataset_id: str) -> Path:
         """公开访问数据文件路径（用于下载）。"""
         return self._records_path(dataset_id)
+
+    def diagnose(self, dataset_id: str) -> list:
+        """重新跑一次诊断，给数据详情页用。"""
+        info = self.get_info(dataset_id)
+        rows = self._read_rows(dataset_id)
+        if info.format == "dpo_pairs":
+            return diagnose_dpo_rows(rows)
+        return diagnose_alpaca_rows(rows)
 
     # ---- helpers ---- #
     def _persist_info(

@@ -105,6 +105,8 @@ class DatasetUploadResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     preview: list[dict[str, str]] = Field(default_factory=list)
     human_summary: str
+    # 上传后的硬规则诊断结果，复用 DiagnosticCard 让前端用同一套渲染
+    diagnostics: list["DiagnosticCard"] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -156,9 +158,15 @@ class DiagnosticCard(BaseModel):
     suggestion: str
     observation: str | None = None
     interpretation: str | None = None
+    mechanism: str | None = None  # 背后机理：模型为什么会这样（教学性说明）
+    how_to_tell: str | None = None  # 如何判断：当多个原因可能并存时帮用户分辨
     next_step: str | None = None
     evidence: str | None = None
     action: DiagnosticAction | None = None
+    # topic 用于前端去重过滤：同一 topic 的 ok 卡若与 warn/error 主诊断同主题，会被折叠
+    topic: Literal[
+        "train_loss", "train_process", "eval_loss", "train_eval", "data", "dpo", "general"
+    ] = "general"
     rank: int = 50
 
 
@@ -294,3 +302,7 @@ class LabResult(BaseModel):
     finetuned_answer: str = ""
     created_at: str
     data: dict[str, Any] = Field(default_factory=dict)
+
+
+# DatasetUploadResult 引用了下方定义的 DiagnosticCard，需要 rebuild 让前向引用生效
+DatasetUploadResult.model_rebuild()

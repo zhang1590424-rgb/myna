@@ -267,6 +267,36 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("训练可能有点不稳", cards[0].title)
         self.assertIsNone(cards[0].action)
 
+    def test_no_validation_split_explained_for_small_dataset(self) -> None:
+        exp = _diagnostic_experiment(
+            loss=[3.0, 2.5, 2.2, 2.0, 1.9, 1.85, 1.84],
+            dataset_count=20,
+        )
+
+        cards = compute_diagnostics(exp)
+
+        no_eval = [c for c in cards if c.topic == "eval_loss" and c.level == "ok"]
+        self.assertTrue(no_eval, "数据 < 30 时应给出未切验证集的解释卡")
+        self.assertIn("没有验证 loss", no_eval[0].title)
+
+    def test_validation_stalled_signals_to_stop(self) -> None:
+        exp = _diagnostic_experiment(
+            loss=[3.0, 2.4, 1.9, 1.6, 1.4, 1.25, 1.15, 1.05, 0.96, 0.88],
+            eval_loss=[1.5, 1.42, 1.40, 1.39, 1.395, 1.392, 1.391, 1.390],
+        )
+
+        cards = compute_diagnostics(exp)
+
+        stalled = [c for c in cards if "训练还在降，验证已经不动" in c.title]
+        self.assertTrue(stalled, "训练降但验证停滞时应给出 stalled 提示")
+
+    def test_diagnostics_carry_topic_for_frontend_filtering(self) -> None:
+        exp = _diagnostic_experiment(loss=[4.0, 3.0, 2.6, 2.3, 2.20, 2.19, 2.18])
+
+        cards = compute_diagnostics(exp)
+
+        self.assertTrue(all(c.topic for c in cards), "所有诊断卡都应带 topic 用于前端按主题过滤")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -255,6 +255,16 @@ def delete_dataset(dataset_id: str):
     return {"deleted": dataset_id}
 
 
+@app.get("/api/datasets/{dataset_id}/diagnostics")
+def diagnose_dataset(dataset_id: str):
+    """数据集质量诊断（硬规则）。供数据详情页随时回看。"""
+    try:
+        cards = datasets.diagnose(dataset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个数据集。") from exc
+    return {"cards": [c.model_dump() for c in cards]}
+
+
 # --------------------------------------------------------------------------- #
 # Pre-training diagnostics
 # --------------------------------------------------------------------------- #
