@@ -103,12 +103,50 @@ function clear(node, { animate = true } = {}) {
   node.replaceChildren();
 }
 
+function actionMenu(items) {
+  const wrap = el("div", { class: "action-menu" });
+  const btn = el("button", {
+    class: "icon-btn action-menu-trigger",
+    type: "button",
+    title: "更多操作",
+    "aria-label": "更多操作",
+  }, "...");
+  const panel = el("div", { class: "action-menu-panel" });
+  for (const item of items) {
+    const menuBtn = el("button", {
+      class: `action-menu-item${item.danger ? " danger" : ""}`,
+      type: "button",
+      onClick: async (e) => {
+        e.stopPropagation();
+        wrap.classList.remove("open");
+        await item.onClick(e);
+      },
+    }, item.label);
+    panel.appendChild(menuBtn);
+  }
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.querySelectorAll(".action-menu.open").forEach((node) => {
+      if (node !== wrap) node.classList.remove("open");
+    });
+    wrap.classList.toggle("open");
+  });
+  wrap.addEventListener("click", (e) => e.stopPropagation());
+  wrap.appendChild(btn);
+  wrap.appendChild(panel);
+  return wrap;
+}
+
+document.addEventListener("click", () => {
+  document.querySelectorAll(".action-menu.open").forEach((node) => node.classList.remove("open"));
+});
+
 function showPreflightDialog(cards) {
   return new Promise((resolve) => {
     const overlay = el("div", { class: "preflight-overlay" });
     const dialog = el("div", { class: "preflight-dialog" });
-    dialog.appendChild(el("div", { class: "preflight-title" }, "数据预检提示"));
-    dialog.appendChild(el("p", { class: "preflight-desc" }, "训练前检测到以下注意事项，你可以先优化数据，也可以直接继续："));
+    dialog.appendChild(el("div", { class: "preflight-title" }, "训练前数据检查"));
+    dialog.appendChild(el("p", { class: "preflight-desc" }, "下面这些问题不会阻止训练，但会影响训练前后差异。"));
 
     const cardList = el("div", { class: "diag-cards" });
     for (const card of cards) {
@@ -127,7 +165,7 @@ function showPreflightDialog(cards) {
 
     const actions = el("div", { class: "preflight-actions" });
     const cancelBtn = el("button", { class: "btn ghost" }, "返回修改");
-    const proceedBtn = el("button", { class: "btn primary" }, "了解，继续训练");
+    const proceedBtn = el("button", { class: "btn primary" }, "继续训练");
     cancelBtn.addEventListener("click", () => { overlay.remove(); resolve(false); });
     proceedBtn.addEventListener("click", () => { overlay.remove(); resolve(true); });
     actions.appendChild(cancelBtn);
@@ -650,7 +688,7 @@ function renderExperiments({ animate = true } = {}) {
       el(
         "p",
         { class: "view-sub" },
-        `${state.experiments.length} 条记录 · 模型 + 数据 + 参数的每一次组合`
+        `${state.experiments.length} 条训练记录`
       ),
     ]),
     el(
@@ -724,26 +762,29 @@ function renderExperiments({ animate = true } = {}) {
 
 function experimentRow(exp) {
   const checked = state.selectedForCompare.has(exp.id);
-  const check = el("input", {
-    type: "checkbox",
-    onClick: (e) => {
-      e.stopPropagation();
-      if (e.target.checked) state.selectedForCompare.add(exp.id);
-      else state.selectedForCompare.delete(exp.id);
-      renderCompareBar();
-      row.classList.toggle("selected", e.target.checked);
-    },
+  let row;
+  const compareBtn = el("button", { class: `btn btn-sm compare-toggle${checked ? " active" : ""}` }, checked ? "已选" : "对比");
+  compareBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (state.selectedForCompare.has(exp.id)) {
+      state.selectedForCompare.delete(exp.id);
+    } else {
+      state.selectedForCompare.add(exp.id);
+    }
+    const nextChecked = state.selectedForCompare.has(exp.id);
+    compareBtn.textContent = nextChecked ? "已选" : "对比";
+    compareBtn.classList.toggle("active", nextChecked);
+    row.classList.toggle("selected", nextChecked);
+    renderCompareBar();
   });
-  check.checked = checked;
 
-  const row = el(
+  row = el(
     "div",
     {
       class: `exp-row ${checked ? "selected" : ""}`,
       onClick: () => navigate(`/detail/${exp.id}`),
     },
     [
-      el("div", { class: "exp-check" }, [check]),
       el("div", { class: "exp-main" }, [
         el("div", { class: "exp-name" }, [statusDot(exp.status), exp.name]),
         el(
@@ -758,17 +799,20 @@ function experimentRow(exp) {
       ]),
       el("div", { class: "exp-result" }, [experimentResult(exp)]),
       el("div", { class: "exp-actions" }, [
-        el("button", {
-          class: "btn btn-sm danger",
-          onClick: async (e) => {
-            e.stopPropagation();
-            await deleteExperiment(exp, async () => {
-              state.experiments = await api("/api/experiments");
-              state.selectedForCompare.delete(exp.id);
-              renderExperiments();
-            }, e.currentTarget);
+        compareBtn,
+        actionMenu([
+          {
+            label: "删除实验",
+            danger: true,
+            onClick: async (e) => {
+              await deleteExperiment(exp, async () => {
+                state.experiments = await api("/api/experiments");
+                state.selectedForCompare.delete(exp.id);
+                renderExperiments();
+              }, e.currentTarget);
+            },
           },
-        }, "删除"),
+        ]),
       ]),
     ]
   );
@@ -879,7 +923,7 @@ function renderNewExperiment(cloneFromId) {
         el(
           "span",
           {},
-          "缺少训练组件或本地模型。请先到模型页下载一个模型，环境就绪后即可发起真实训练（无需重启）。"
+          "缺少训练组件或本地模型。先到模型页下载一个模型。"
         ),
       ])
     );
@@ -927,7 +971,7 @@ function renderNewExperiment(cloneFromId) {
     }
   }
   paintModels();
-  page.appendChild(fieldRow("底座模型", modelChoices));
+  page.appendChild(fieldRow("训练模型", modelChoices));
 
   // ---- dataset field ----
   const datasetWrap = el("div", {});
@@ -984,8 +1028,8 @@ function renderNewExperiment(cloneFromId) {
   function paintMethod() {
     clear(methodChoices);
     for (const [val, title, note] of [
-      ["sft", "SFT", "监督微调，教模型按你的问答方式回答"],
-      ["dpo", "DPO", "偏好优化，给出更好/更差两种回答精调风格"],
+      ["sft", "SFT", "用问答样本教模型怎么回答"],
+      ["dpo", "DPO", "用好/差回答教模型偏好"],
     ]) {
       methodChoices.appendChild(
         el(
@@ -1017,21 +1061,21 @@ function renderNewExperiment(cloneFromId) {
   function paintPresetGuidance() {
     const dataset = selectedDataset();
     if (!dataset) {
-      presetGuidance.textContent = "先选训练数据，再决定训练强度。";
+      presetGuidance.textContent = "先选数据，再决定训练强度。";
       return;
     }
     if (dataset.row_count < 30) {
       presetGuidance.textContent =
-        `${dataset.row_count} 条数据偏少：适合试跑流程、观察口吻或格式变化，不适合判断最终能力；先用「试跑」或「推荐」，不要一开始选「加强」。`;
+        `${dataset.row_count} 条数据偏少：先用「试跑」或「推荐」，训练后看回答变化。`;
       return;
     }
     if (dataset.row_count >= 200) {
       presetGuidance.textContent =
-        `${dataset.row_count} 条数据较充足：先用「推荐」建立基线，测评变化不明显时再用「加强」做对照。`;
+        `${dataset.row_count} 条数据较充足：先用「推荐」建立基线，需要对照时再用「加强」。`;
       return;
     }
     presetGuidance.textContent =
-      `${dataset.row_count} 条数据适合第一次正式训练：建议先用「推荐」，训练后到测评页看前后回答差异。`;
+      `${dataset.row_count} 条数据：先用「推荐」，训练后去测评。`;
   }
   function paintPresets() {
     clear(presetChoices);
@@ -1062,12 +1106,12 @@ function renderNewExperiment(cloneFromId) {
   const paramGrid = el("div", { class: "param-grid" });
   function paintAdvanced() {
     clear(advanced);
-    advanced.appendChild(el("summary", {}, "展开调整高级参数"));
+    advanced.appendChild(el("summary", {}, "更多设置"));
     clear(paramGrid);
     const specs = [
       ["epochs", "训练轮数", 1, 30, 1, "同样的数据反复学几遍。越多学得越透，但太多会死记硬背。"],
       ["learning_rate", "学习率", 0.00001, 0.01, 0.00001, "每次调整的步子大小。太大容易学跑偏，太小学得慢。"],
-      ["lora_rank", "LoRA rank", 1, 64, 1, "给模型多大的「学习空间」。越大能学的越多，也更吃资源。"],
+      ["lora_rank", "LoRA rank", 1, 64, 1, "这次训练可写入的容量。越大越吃资源。"],
       ["batch_size", "批大小", 1, 16, 1, "一次同时看几条数据。越大越稳，但更占内存。"],
       ["grad_accum", "梯度累积步数", 1, 16, 1, "攒几批再更新一次模型。数据少就调小，模型学得更勤。"],
     ];
@@ -1123,7 +1167,7 @@ function renderNewExperiment(cloneFromId) {
   }
   startBtn.addEventListener("click", async () => {
     if (!canTrain) return toast("环境未就绪，请先到模型页下载模型。", true);
-    if (!form.model_id) return toast("请先选一个可用的底座模型。", true);
+    if (!form.model_id) return toast("请先选一个可用模型。", true);
     if (!form.dataset_id) return toast("请先选一份匹配的训练数据。", true);
     startBtn.disabled = true;
     try {
@@ -1210,9 +1254,9 @@ async function renderDetail(id, { animate = true } = {}) {
   }
   if (exp.status === "completed") {
     actions.push(
+      el("button", { class: "btn primary", onClick: () => navigate(`/lab/${exp.id}`) }, "开始测评"),
       el("a", { class: "btn", href: `/api/experiments/${id}/export` }, "导出 LoRA"),
-      el("a", { class: "btn", href: `/api/experiments/${id}/export?merge=true` }, "导出完整模型"),
-      el("button", { class: "btn", onClick: () => navigate(`/lab/${exp.id}`) }, "去测评试用")
+      el("a", { class: "btn", href: `/api/experiments/${id}/export?merge=true` }, "导出完整模型")
     );
   }
   actions.push(
@@ -1224,16 +1268,15 @@ async function renderDetail(id, { animate = true } = {}) {
       },
       "以此为模板"
     ),
-    el(
-      "button",
+    actionMenu([
       {
-        class: "btn danger",
+        label: "删除实验",
+        danger: true,
         onClick: async (e) => {
           await deleteExperiment(exp, async () => navigate("/experiments"), e.currentTarget);
         },
       },
-      "删除"
-    )
+    ])
   );
 
   canvas.appendChild(
@@ -1395,7 +1438,7 @@ async function renderDetail(id, { animate = true } = {}) {
   }
   canvas.appendChild(effect);
 
-  // 训练完成后的结果解读模块（图表下方、笔记上方）—— 诊断摘要 + 检查单
+  // 训练完成后的结果解读模块：先给行动判断，再展开检查项。
   const finalDiags = exp.status === "completed" ? (exp.diagnostics || []) : [];
   if (finalDiags.length) {
     const diagSection = el("section", { class: "detail-section result-insights" });
@@ -1411,23 +1454,14 @@ async function renderDetail(id, { animate = true } = {}) {
       (c) => !(c.level === "ok" && topicsWithIssue.has(c.topic || "general"))
     );
 
-    const topicTitles = {
-      train_loss: "训练曲线",
-      train_process: "训练过程",
-      eval_loss: "泛化判断",
-      train_eval: "训练与验证",
-      data: "数据质量",
-      dpo: "偏好学习",
-      general: "其他检查",
-    };
-    const topicSubtitles = {
-      train_loss: "train loss",
-      train_process: "process",
-      eval_loss: "eval loss",
-      train_eval: "train / eval",
-      data: "dataset",
-      dpo: "dpo",
-      general: "general",
+    const topicMeta = {
+      train_loss: { title: "训练曲线", sub: "loss 是否按预期下降" },
+      train_process: { title: "训练过程", sub: "过程是否稳定" },
+      eval_loss: { title: "泛化判断", sub: "训练集外表现的参考" },
+      train_eval: { title: "训练与验证", sub: "是否可能训过头" },
+      data: { title: "数据质量", sub: "样本数量与重复风险" },
+      dpo: { title: "偏好学习", sub: "偏好样本是否可靠" },
+      general: { title: "其他检查", sub: "辅助判断" },
     };
     const referenceSignals = [
       "没有验证",
@@ -1444,54 +1478,49 @@ async function renderDetail(id, { animate = true } = {}) {
         card.interpretation,
         card.suggestion,
       ].filter(Boolean).join(" ");
-      if (referenceSignals.some((s) => text.includes(s))) {
-        return "reference";
-      }
-      return card.level === "ok" ? "normal" : "abnormal";
+      if (card.level === "error" || card.level === "warn") return "abnormal";
+      if (referenceSignals.some((s) => text.includes(s))) return "reference";
+      return "normal";
     };
     const statusMeta = {
       normal: { label: "正常", className: "normal" },
       abnormal: { label: "异常", className: "abnormal" },
       reference: { label: "参考", className: "reference" },
     };
-    const buildAnalysis = (card) => {
-      const parts = [
-        card.observation,
-        card.interpretation,
-        card.mechanism,
-        card.how_to_tell,
-      ].filter(Boolean);
-      return parts.length ? parts : [card.title];
+    const severityOrder = { abnormal: 0, reference: 1, normal: 2 };
+    const buildDetails = (card) => {
+      const parts = [];
+      if (card.interpretation) parts.push(["怎么理解", card.interpretation]);
+      if (card.mechanism) parts.push(["背后原因", card.mechanism]);
+      if (card.how_to_tell) parts.push(["怎么分辨", card.how_to_tell]);
+      if (card.evidence) parts.push(["依据", card.evidence]);
+      return parts;
     };
 
-    const annotatedCards = cards.map((card) => ({
-      card,
-      status: getInsightStatus(card),
-    }));
-    const abnormalCards = annotatedCards.filter((item) => item.status === "abnormal");
+    const annotatedCards = cards
+      .map((card) => ({ card, status: getInsightStatus(card) }))
+      .sort((a, b) => {
+        const statusDiff = severityOrder[a.status] - severityOrder[b.status];
+        if (statusDiff !== 0) return statusDiff;
+        return (a.card.rank ?? 50) - (b.card.rank ?? 50);
+      });
+    const issueCards = annotatedCards.filter((item) => item.status === "abnormal");
     const referenceCards = annotatedCards.filter((item) => item.status === "reference");
-    const hasError = cards.some((c) => c.level === "error");
+    const normalCards = annotatedCards.filter((item) => item.status === "normal");
+    const hasError = annotatedCards.some((item) => item.card.level === "error");
+    const leadIssue = issueCards[0]?.card;
     const summaryTitle = hasError
-      ? "先处理异常，再考虑重训"
-      : abnormalCards.length
-        ? "先去测评，重点看异常项"
-        : "先去测评，不急着重训";
-    const overallText = hasError
-      ? "训练里出现了明确异常，建议先处理最前面的异常项。"
-      : abnormalCards.length
-        ? "训练过程没有明显失败信号，但有项目可能影响最终效果。"
-        : "训练过程基本正常，没有发现明显失败信号。";
-    const riskText = abnormalCards.length
-      ? `有 ${abnormalCards.length} 项异常：${abnormalCards[0].card.title}`
-      : referenceCards.length
-        ? `有 ${referenceCards.length} 项只能作为参考，最终效果仍要看测评。`
-        : "未发现需要优先处理的风险。";
-    const nextText = hasError
-      ? "先按异常项建议处理；处理后再重新训练或测评。"
-      : abnormalCards.length
-        ? "先用真实问题测评；如果效果不满意，再按异常项建议调整。"
-        : "用训练集外的问题做前后对比，确认回答是否真的变好。";
-
+      ? "先处理训练异常"
+      : issueCards.length
+        ? "先测评，再按风险调整"
+        : "训练过程正常，进入测评";
+    const summaryText = hasError
+      ? `最优先处理：${leadIssue?.title || "训练异常"}。处理后再重新训练或测评。`
+      : issueCards.length
+        ? `有 ${issueCards.length} 个风险信号会影响效果判断。先用训练集外问题测评，如果效果不明显，再按风险项调整。`
+        : referenceCards.length
+          ? "训练过程没有明显失败信号。部分指标只能做参考，最终仍以训练前后回答对比为准。"
+          : "训练过程没有明显失败信号。下一步用真实问题对比训练前后的回答变化。";
     const report = el("div", { class: "insight-report" });
 
     // 顶部统一行动按钮（按 action 类型去重）
@@ -1503,6 +1532,10 @@ async function renderDetail(id, { animate = true } = {}) {
       if (seenActions.has(key)) continue;
       seenActions.add(key);
       actions.push({ key, label: card.action.label });
+    }
+    if (!seenActions.has("goto_eval")) {
+      actions.push({ key: "goto_eval", label: "去测评" });
+      seenActions.add("goto_eval");
     }
     const actionPriority = hasError
       ? { goto_data: 0, retrain: 1, goto_eval: 2 }
@@ -1518,64 +1551,101 @@ async function renderDetail(id, { animate = true } = {}) {
       return btn;
     });
 
+    const renderStatus = (status) => {
+      const meta = statusMeta[status] || statusMeta.reference;
+      return el("span", { class: `insight-status insight-status-${meta.className}` }, meta.label);
+    };
+    const renderInsightCard = ({ card, status }, compact = false) => {
+      const topic = card.topic || "general";
+      const meta = topicMeta[topic] || topicMeta.general;
+      const details = buildDetails(card);
+      return el("article", { class: `insight-card insight-card-${status}${compact ? " insight-card-compact" : ""}` }, [
+        el("div", { class: "insight-card-head" }, [
+          el("div", { class: "insight-card-topic" }, [
+            el("span", { class: "insight-card-topic-title" }, meta.title),
+            el("span", { class: "insight-card-topic-sub" }, meta.sub),
+          ]),
+          renderStatus(status),
+        ]),
+        el("h3", { class: "insight-card-title" }, card.title),
+        card.observation
+          ? el("p", { class: "insight-card-observation" }, card.observation)
+          : null,
+        el("p", { class: "insight-card-next" }, card.next_step || card.suggestion || "先看训练前后的测评结果。"),
+        details.length
+          ? el("details", { class: "insight-card-details" }, [
+              el("summary", {}, "查看判断依据"),
+              el("div", { class: "insight-card-detail-body" },
+                details.map(([label, text]) =>
+                  el("p", {}, [
+                    el("strong", {}, `${label}：`),
+                    text,
+                  ])
+                )
+              ),
+            ])
+          : null,
+      ]);
+    };
+    const renderGroup = (title, caption, items, emptyText, compact = false) =>
+      el("div", { class: "insight-group" }, [
+        el("div", { class: "insight-group-head" }, [
+          el("div", {}, [
+            el("h3", {}, title),
+            caption ? el("p", {}, caption) : null,
+          ]),
+          el("span", { class: "insight-group-count tnum" }, String(items.length)),
+        ]),
+        items.length
+          ? el("div", { class: "insight-card-list" }, items.map((item) => renderInsightCard(item, compact)))
+          : el("p", { class: "insight-empty-line" }, emptyText),
+      ]);
+
     report.appendChild(
-      el("div", { class: "insight-summary" }, [
-        el("div", { class: "insight-summary-main" }, [
-          el("div", { class: "insight-summary-label" }, "诊断摘要"),
-          el("div", { class: "insight-summary-title" }, summaryTitle),
+      el("div", { class: "insight-decision" }, [
+        el("div", { class: "insight-decision-main" }, [
+          el("div", { class: "insight-decision-kicker" }, "建议先做"),
+          el("h2", { class: "insight-decision-title" }, summaryTitle),
+          el("p", { class: "insight-decision-text" }, summaryText),
         ]),
         actionBtns.length
           ? el("div", { class: "insight-report-actions" }, actionBtns)
           : null,
-        el("div", { class: "insight-summary-grid" }, [
-          el("div", { class: "insight-summary-item" }, [
-            el("div", { class: "insight-summary-item-label" }, "整体结论"),
-            el("div", { class: "insight-summary-item-text" }, overallText),
-          ]),
-          el("div", { class: "insight-summary-item" }, [
-            el("div", { class: "insight-summary-item-label" }, "主要风险"),
-            el("div", { class: "insight-summary-item-text" }, riskText),
-          ]),
-          el("div", { class: "insight-summary-item" }, [
-            el("div", { class: "insight-summary-item-label" }, "下一步"),
-            el("div", { class: "insight-summary-item-text" }, nextText),
-          ]),
-        ]),
       ])
     );
 
-    const table = el("div", { class: "insight-checklist" }, [
-      el("div", { class: "insight-checklist-head" }, [
-        el("div", {}, "检查项目"),
-        el("div", {}, "状态"),
-        el("div", {}, "诊断分析"),
-        el("div", {}, "建议"),
-      ]),
-    ]);
-    annotatedCards.forEach(({ card, status }) => {
-      const topic = card.topic || "general";
-      const meta = statusMeta[status];
-      table.appendChild(
-        el("div", { class: `insight-check-row insight-check-row-${meta.className}` }, [
-          el("div", { class: "insight-check-topic" }, [
-            el("div", { class: "insight-check-topic-title" }, topicTitles[topic] || "其他检查"),
-            el("div", { class: "insight-check-topic-subtitle" }, topicSubtitles[topic] || topic),
-            el("div", { class: "insight-check-finding-title" }, card.title),
+    report.appendChild(
+      renderGroup(
+        "优先检查",
+        issueCards.length ? "这些信号最可能影响最终效果。" : "没有发现需要优先处理的问题。",
+        issueCards,
+        "训练过程没有明显异常。先进入测评，用训练集外的问题看回答是否真的变好。"
+      )
+    );
+
+    if (normalCards.length) {
+      report.appendChild(
+        el("details", { class: "insight-reference-fold insight-secondary-fold" }, [
+          el("summary", {}, [
+            el("span", {}, "正常项"),
+            el("span", { class: "tnum" }, String(normalCards.length)),
           ]),
-          el("div", { class: "insight-check-status-cell" }, [
-            el("span", { class: `insight-status insight-status-${meta.className}` }, meta.label),
-          ]),
-          el("div", { class: "insight-check-analysis" }, [
-            ...buildAnalysis(card).map((text) => el("p", {}, text)),
-            card.evidence
-              ? el("p", { class: "insight-evidence-line" }, `依据：${card.evidence}`)
-              : null,
-          ]),
-          el("div", { class: "insight-check-suggestion" }, card.next_step || card.suggestion || "先看测评结果。"),
+          renderGroup("正常项", "这些检查暂时不需要处理。", normalCards, "", true),
         ])
       );
-    });
-    report.appendChild(table);
+    }
+
+    if (referenceCards.length) {
+      report.appendChild(
+        el("details", { class: "insight-reference-fold" }, [
+          el("summary", {}, [
+            el("span", {}, "参考项"),
+            el("span", { class: "tnum" }, String(referenceCards.length)),
+          ]),
+          renderGroup("参考项", "这些信号不能单独判断训练好坏，只作为测评前的背景。", referenceCards, "", true),
+        ])
+      );
+    }
 
     diagSection.appendChild(report);
     canvas.appendChild(diagSection);
@@ -1733,7 +1803,7 @@ function trainEvalLossChart(trainLoss, valLoss) {
     add("path", { d: trainPath, fill: "none", stroke: "#5E6AD2", "stroke-width": "2.2", "stroke-linecap": "round", "stroke-linejoin": "round" });
     // 终点
     const endY = Y(trainLoss[trainLoss.length - 1]);
-    add("circle", { cx: lastX, cy: endY, r: "4", fill: "#fff", stroke: "#5E6AD2", "stroke-width": "2" });
+    add("circle", { cx: lastX, cy: endY, r: "4", fill: "#FEFEFC", stroke: "#5E6AD2", "stroke-width": "2" });
   }
 
   if (valLoss && valLoss.length > 1) {
@@ -1741,7 +1811,7 @@ function trainEvalLossChart(trainLoss, valLoss) {
     // 终点
     const lastX = xOf(valLoss.length - 1, valLoss.length);
     const endY = Y(valLoss[valLoss.length - 1]);
-    add("circle", { cx: lastX, cy: endY, r: "4", fill: "#fff", stroke: "#E07A3A", "stroke-width": "2" });
+    add("circle", { cx: lastX, cy: endY, r: "4", fill: "#FEFEFC", stroke: "#E07A3A", "stroke-width": "2" });
   }
   return svg;
 }
@@ -1880,7 +1950,7 @@ function renderModels() {
     el("div", { class: "view-head" }, [
       el("div", {}, [
         el("h1", { class: "view-title" }, "模型"),
-        el("p", { class: "view-sub" }, "本地底座模型。下载后才能用于实验。"),
+        el("p", { class: "view-sub" }, "下载到本机后才能训练。"),
       ]),
     ])
   );
@@ -2006,7 +2076,7 @@ function renderDatasets() {
       el(
         "p",
         { class: "view-sub" },
-        `${state.datasets.length} 份数据集 · SFT 用问答数据，DPO 用偏好数据`
+        `${state.datasets.length} 份数据集`
       ),
     ]),
     el(
@@ -2112,8 +2182,8 @@ function filteredDatasets() {
 
 /* ---- 上传数据：与"新建训练"对齐的草稿确认流 ---- *
  * 上传后数据进入"草稿态"：原地展示文件元信息 + 诊断（纯文本流）+ 预览。
- * 底部固定「取消 / 确认创建」操作栏：取消 = DELETE 已落库的草稿；
- * 确认创建 = 跳详情；error 等级时按钮置灰，强制用户先换一份。
+ * 底部固定「取消 / 使用这份数据」操作栏：取消 = DELETE 已落库的草稿；
+ * 使用这份数据 = 跳详情；error 等级时按钮置灰，强制用户先换一份。
  */
 function renderDatasetUpload() {
   clear(canvas);
@@ -2136,7 +2206,7 @@ function renderDatasetUpload() {
   ];
   let selectedFormat = formatOptions[0].value;
   let currentDatasetId = null;       // 上传成功后记录的 dataset_id
-  let currentTopLevel = "ok";        // 诊断等级，影响「确认创建」是否可点
+  let currentTopLevel = "ok";        // 诊断等级，影响「使用这份数据」是否可点
 
   // === 数据类型选择区 ===
   const typeSection = el("div", { class: "upload-step" });
@@ -2267,7 +2337,7 @@ function renderDatasetUpload() {
         navigate(`/dataset-detail/${currentDatasetId}`);
       },
     },
-    "确认创建 →"
+    "使用这份数据"
   );
   page.appendChild(el("div", { class: "form-actions" }, [cancelBtn, confirmBtn]));
 
@@ -2346,7 +2416,7 @@ function renderDatasetUpload() {
 }
 
 /* 把"上传结果"渲染进给定容器：数据检查 + 预览。
- * 不再有状态条容器、不再有行内按钮——主操作集中到页面底部的「确认创建」。
+ * 不再有状态条容器、不再有行内按钮，主操作集中到页面底部的「使用这份数据」。
  */
 function renderUploadResultInto(mount, result) {
   clear(mount);
@@ -2594,26 +2664,39 @@ function highlightPreviewRow(table, lineNumber) {
   target.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
+function datasetHealth(d) {
+  const min = d.format === "dpo_pairs" ? 20 : 30;
+  const hardMin = d.format === "dpo_pairs" ? 10 : 10;
+  if (d.row_count < hardMin) {
+    return { label: "样本太少", className: "danger", text: "建议先补数据" };
+  }
+  if (d.row_count < min) {
+    return { label: "可试跑", className: "warn", text: "适合跑通流程" };
+  }
+  return { label: "可训练", className: "ok", text: "适合新建实验" };
+}
+
 function datasetRow(d) {
+  const health = datasetHealth(d);
   return el("div", { class: "list-row clickable", onClick: () => navigate(`/dataset-detail/${d.id}`) }, [
     el("div", {}, [
       el("div", { class: "row-name" }, [
         el("span", { class: "row-name-text", title: d.name }, d.name),
         el("span", { class: "badge-ok" }, d.format === "dpo_pairs" ? "偏好 DPO" : "问答 SFT"),
+        el("span", { class: `data-health data-health-${health.className}` }, health.label),
       ]),
       el(
         "div",
         { class: "row-note" },
-        `${d.row_count} 条 · 来自 ${d.source_filename} · ${relativeTime(d.created_at)}`
+        `${d.row_count} 条 · ${health.text} · 来自 ${d.source_filename} · ${relativeTime(d.created_at)}`
       ),
     ]),
     el("div", { class: "row-actions" }, [
-      el(
-        "button",
+      actionMenu([
         {
-          class: "btn btn-sm danger",
+          label: "删除数据",
+          danger: true,
           onClick: async (e) => {
-            e.stopPropagation();
             if (!confirm(`删除数据集「${d.name}」？`)) return;
             const delBtn = e.currentTarget;
             delBtn.disabled = true; delBtn.textContent = "删除中…";
@@ -2628,8 +2711,7 @@ function datasetRow(d) {
             }
           },
         },
-        "删除"
-      ),
+      ]),
     ]),
   ]);
 }
@@ -2765,13 +2847,13 @@ async function renderDatasetDetail(id) {
 const LAB_STYLES = [
   { id: "steady", title: "稳重", note: "回答更稳定保守，适合客服、问答", params: { temperature: 0.5, top_p: 0.9, repetition_penalty: 1.15, no_repeat_ngram_size: 3 } },
   { id: "balanced", title: "平衡", note: "稳定与灵活兼顾，适合日常对话", params: { temperature: 0.7, top_p: 0.9, repetition_penalty: 1.15, no_repeat_ngram_size: 3 } },
-  { id: "lively", title: "活泼", note: "更有创意发挥，适合角色扮演、创作", params: { temperature: 1.0, top_p: 0.95, repetition_penalty: 1.2, no_repeat_ngram_size: 3 } },
+  { id: "lively", title: "发散", note: "回答更开放，适合角色和创作", params: { temperature: 1.0, top_p: 0.95, repetition_penalty: 1.2, no_repeat_ngram_size: 3 } },
 ];
 
 const LAB_PARAM_SPECS = [
-  ["temperature", "随机性 temperature", 0, 2, 0.1, "越高回答越天马行空，越低越保守。太高会胡说，为 0 易复读。"],
-  ["top_p", "候选范围 top_p", 0, 1, 0.05, "越小越保守，只在最靠谱的词里挑。"],
-  ["repetition_penalty", "防复读力度", 1, 1.5, 0.05, "对已说过的词降权，越大越不容易重复。太大会凑怪词。"],
+  ["temperature", "随机性 temperature", 0, 2, 0.1, "越高越发散，越低越保守。过高会不稳定。"],
+  ["top_p", "候选范围 top_p", 0, 1, 0.05, "越小越保守，只在更高概率的词里选择。"],
+  ["repetition_penalty", "防复读力度", 1, 1.5, 0.05, "降低重复用词概率。过高会让表达异常。"],
   ["no_repeat_ngram_size", "禁止重复词组长度", 2, 4, 1, "禁止连续几个词的组合重复出现。"],
 ];
 
@@ -2815,7 +2897,7 @@ function buildStyleControl() {
 
   function paintAdvanced() {
     clear(advanced);
-    advanced.appendChild(el("summary", {}, "展开调整高级参数"));
+    advanced.appendChild(el("summary", {}, "更多设置"));
     clear(paramGrid);
     const values = currentStyleParams();
     for (const [key, label, min, max, step, hint] of LAB_PARAM_SPECS) {
@@ -2916,7 +2998,7 @@ function renderLabHeader({ subtitle, actions = [] }) {
 function renderLabHistoryHome(completed, history) {
   clear(canvas);
   renderLabHeader({
-    subtitle: "回看每次训练前后的验证结果。",
+    subtitle: "回看训练前后的回答差异。",
     actions: [el("button", { class: "btn primary", onClick: () => renderLabNew(completed, completed[0].id, history) }, "＋ 新建测评")],
   });
 
@@ -3020,6 +3102,7 @@ function labHistoryRow(item, completed, history) {
   const questionCount = labResultItems(item).length || 1;
   const status = labResultStatus(item);
   const kindLabel = item.kind === "batch" ? "批量测评" : item.kind === "chat" ? "自由对话" : "单问对比";
+  const summary = labHistorySummary(item);
   return el("div", { class: "lab-history-row clickable", onClick: () => renderLabDetail(item, completed, history) }, [
     el("div", { class: "lab-history-main" }, [
       el("span", { class: "lab-history-title" }, item.kind === "batch" ? item.prompt || "批量测评" : item.kind === "chat" ? item.prompt || "自由对话" : item.prompt),
@@ -3031,24 +3114,50 @@ function labHistoryRow(item, completed, history) {
         status === "failed" ? " · 失败" : "",
         ` · ${formatDateTime(item.created_at)}`,
       ]),
+      summary ? el("span", { class: "lab-history-summary" }, summary) : null,
     ]),
-    el("button", {
-      class: "btn btn-sm danger",
-      onClick: async (e) => {
-        e.stopPropagation();
-        if (!confirm("删除这条测评记录？")) return;
-        const delBtn = e.currentTarget;
-        delBtn.disabled = true; delBtn.textContent = "删除中…";
-        try {
-          await api(`/api/lab/history/${item.id}`, { method: "DELETE" });
-          await renderLab();
-        } catch (err) {
-          toast(err.message, true);
-          delBtn.disabled = false; delBtn.textContent = "删除";
-        }
+    actionMenu([
+      {
+        label: "删除记录",
+        danger: true,
+        onClick: async (e) => {
+          if (!confirm("删除这条测评记录？")) return;
+          const delBtn = e.currentTarget;
+          delBtn.disabled = true; delBtn.textContent = "删除中…";
+          try {
+            await api(`/api/lab/history/${item.id}`, { method: "DELETE" });
+            await renderLab();
+          } catch (err) {
+            toast(err.message, true);
+            delBtn.disabled = false; delBtn.textContent = "删除";
+          }
+        },
       },
-    }, "删除"),
+    ]),
   ]);
+}
+
+function compactText(text, limit = 72) {
+  if (!text) return "";
+  const clean = String(text).replace(/\s+/g, " ").trim();
+  return clean.length > limit ? `${clean.slice(0, limit)}...` : clean;
+}
+
+function labHistorySummary(item) {
+  const status = labResultStatus(item);
+  if (status === "running") return "正在生成训练前后回答";
+  if (status === "failed") return item.data?.error || "测评失败";
+  if (item.kind === "chat") {
+    const rounds = (item.data?.messages || []).filter((m) => m.role === "user").length;
+    return rounds ? `${rounds} 轮对话` : "没有保存对话内容";
+  }
+  const rows = labResultItems(item);
+  const first = rows[0] || {};
+  const after = compactText(first.finetuned_answer, 64);
+  if (item.kind === "batch") {
+    return after ? `训练后示例：${after}` : `${rows.length || 0} 条问题`;
+  }
+  return after ? `训练后：${after}` : "";
 }
 
 async function renderLabNew(completed, initialExperimentId, history = []) {
@@ -3115,7 +3224,7 @@ async function renderLabNew(completed, initialExperimentId, history = []) {
         onClick: () => { mode = "chat"; paintForm(); },
       }, [
         el("span", { class: "choice-title" }, "自由对话"),
-        el("span", { class: "choice-note" }, "和训练后的模型持续聊天，感受效果"),
+        el("span", { class: "choice-note" }, "连续追问，补充判断训练效果"),
       ]),
     ]);
 
