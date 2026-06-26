@@ -1503,19 +1503,19 @@ async function renderDetail(id, { animate = true } = {}) {
     const leadCard = topicEntries[0]?.cards[0];
 
     const summaryTitle = hasError
-      ? "先处理训练异常"
+      ? "这次训练有问题，建议先调整再重跑"
       : hasWarn
-        ? "先测评，再按风险调整"
-        : "训练过程正常，进入测评";
+        ? "训练完成，有几点值得留意"
+        : "训练顺利完成，去看看效果吧";
     const summaryText = hasError
-      ? `最优先处理：${leadCard?.title || "训练异常"}。处理后再重新训练或测评。`
+      ? "下方标红的检查项需要先处理，否则测评大概率看不到改善。"
       : hasWarn
-        ? `有 ${issueCount} 个风险信号会影响效果判断。先用训练集外问题测评，如果效果不明显，再按风险项调整。`
-        : "训练过程没有明显失败信号。下一步用真实问题对比训练前后的回答变化。";
+        ? `${issueCount} 个检查项可能影响最终效果。建议先去测评看回答，再回来对照调整。`
+        : "各项指标没有异常。去测评页用真实问题对比训练前后的回答变化。";
 
     const primaryAction = hasError
-      ? { label: "检查数据", action: "goto_data" }
-      : { label: "去测评", action: "goto_eval" };
+      ? { label: "去看数据", action: "goto_data" }
+      : { label: "去测评看效果", action: "goto_eval" };
 
     // Build report
     const report = el("div", { class: "dx-report" });
@@ -1567,21 +1567,9 @@ async function renderDetail(id, { animate = true } = {}) {
         }
         finding.appendChild(el("p", { class: "dx-finding-next" }, card.next_step || card.suggestion || "先看训练前后的测评结果。"));
 
-        // Detail fold
-        const parts = [];
-        if (card.interpretation) parts.push(["怎么理解", card.interpretation]);
-        if (card.mechanism) parts.push(["背后原因", card.mechanism]);
-        if (card.how_to_tell) parts.push(["怎么分辨", card.how_to_tell]);
-        if (card.evidence) parts.push(["依据", card.evidence]);
-        if (parts.length) {
-          const details = el("details", { class: "dx-finding-details" });
-          details.appendChild(el("summary", {}, "判断依据"));
-          const body = el("div", { class: "dx-finding-details-body" });
-          for (const [label, text] of parts) {
-            body.appendChild(el("p", {}, [el("strong", {}, `${label}：`), text]));
-          }
-          details.appendChild(body);
-          finding.appendChild(details);
+        // Evidence as subtle inline note (no nested fold)
+        if (card.evidence) {
+          finding.appendChild(el("p", { class: "dx-finding-evidence" }, card.evidence));
         }
 
         // Per-finding action (hide if same as primary)

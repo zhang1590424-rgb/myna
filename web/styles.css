@@ -1219,46 +1219,11 @@ textarea.input {
   content: "→ ";
   color: var(--text-faint);
 }
-.dx-finding-details {
-  margin-top: 10px;
-}
-.dx-finding-details > summary {
+.dx-finding-evidence {
+  margin: 6px 0 0;
   font-size: 12px;
-  color: var(--text-muted);
-  cursor: pointer;
-  list-style: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.dx-finding-details > summary::-webkit-details-marker {
-  display: none;
-}
-.dx-finding-details > summary::before {
-  content: "▸";
-  font-size: 10px;
-}
-.dx-finding-details[open] > summary::before {
-  content: "▾";
-}
-.dx-finding-details-body {
-  margin-top: 8px;
-  padding: 10px 12px;
-  background: var(--accent-soft);
-  border-radius: var(--radius-sm, 6px);
-}
-.dx-finding-details-body p {
-  font-size: 12.5px;
-  color: var(--text-secondary);
-  line-height: 1.65;
-  margin: 0;
-}
-.dx-finding-details-body p + p {
-  margin-top: 8px;
-}
-.dx-finding-details-body strong {
-  color: var(--text);
-  font-weight: 560;
+  color: var(--text-faint);
+  line-height: 1.55;
 }
 .dx-finding-action {
   margin-top: 10px;
