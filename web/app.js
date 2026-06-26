@@ -1438,13 +1438,35 @@ async function renderDetail(id, { animate = true } = {}) {
   }
   canvas.appendChild(effect);
 
-  // 训练完成后的结果解读模块：先给行动判断，再展开检查项。
+  // 训练完成后的结果解读模块（体检报告式：结论 → 按主题逐行检查 → 展开详情）
   const finalDiags = exp.status === "completed" ? (exp.diagnostics || []) : [];
   if (finalDiags.length) {
     const diagSection = el("section", { class: "detail-section result-insights" });
     diagSection.appendChild(el("div", { class: "section-label" }, "结果解读"));
 
-    // 同 topic 已有 warn/error 时，对应 ok 卡冲突，去重
+    const topicMeta = {
+      train_loss: { title: "训练曲线" },
+      train_process: { title: "训练过程" },
+      eval_loss: { title: "泛化判断" },
+      train_eval: { title: "训练与验证" },
+      data: { title: "数据质量" },
+      dpo: { title: "偏好学习" },
+      general: { title: "其他检查" },
+    };
+    const referenceSignals = [
+      "没有验证", "没有拿到可解读", "波动较大",
+      "比训练 loss 表现还好", "数据切分", "参考",
+    ];
+    const getCardStatus = (card) => {
+      if (card.level === "error") return "error";
+      if (card.level === "warn") return "warn";
+      const text = [card.title, card.observation, card.interpretation, card.suggestion]
+        .filter(Boolean).join(" ");
+      if (referenceSignals.some((s) => text.includes(s))) return "reference";
+      return "ok";
+    };
+
+    // Same-topic de-dup: if topic has warn/error, drop its ok cards
     const topicsWithIssue = new Set(
       finalDiags
         .filter((c) => c.level === "warn" || c.level === "error")
@@ -1454,199 +1476,133 @@ async function renderDetail(id, { animate = true } = {}) {
       (c) => !(c.level === "ok" && topicsWithIssue.has(c.topic || "general"))
     );
 
-    const topicMeta = {
-      train_loss: { title: "训练曲线", sub: "loss 是否按预期下降" },
-      train_process: { title: "训练过程", sub: "过程是否稳定" },
-      eval_loss: { title: "泛化判断", sub: "训练集外表现的参考" },
-      train_eval: { title: "训练与验证", sub: "是否可能训过头" },
-      data: { title: "数据质量", sub: "样本数量与重复风险" },
-      dpo: { title: "偏好学习", sub: "偏好样本是否可靠" },
-      general: { title: "其他检查", sub: "辅助判断" },
-    };
-    const referenceSignals = [
-      "没有验证",
-      "没有拿到可解读",
-      "波动较大",
-      "比训练 loss 表现还好",
-      "数据切分",
-      "参考",
-    ];
-    const getInsightStatus = (card) => {
-      const text = [
-        card.title,
-        card.observation,
-        card.interpretation,
-        card.suggestion,
-      ].filter(Boolean).join(" ");
-      if (card.level === "error" || card.level === "warn") return "abnormal";
-      if (referenceSignals.some((s) => text.includes(s))) return "reference";
-      return "normal";
-    };
-    const statusMeta = {
-      normal: { label: "正常", className: "normal" },
-      abnormal: { label: "异常", className: "abnormal" },
-      reference: { label: "参考", className: "reference" },
-    };
-    const severityOrder = { abnormal: 0, reference: 1, normal: 2 };
-    const buildDetails = (card) => {
-      const parts = [];
-      if (card.interpretation) parts.push(["怎么理解", card.interpretation]);
-      if (card.mechanism) parts.push(["背后原因", card.mechanism]);
-      if (card.how_to_tell) parts.push(["怎么分辨", card.how_to_tell]);
-      if (card.evidence) parts.push(["依据", card.evidence]);
-      return parts;
-    };
+    // Group by topic
+    const topicGroups = {};
+    for (const card of cards) {
+      const topic = card.topic || "general";
+      if (!topicGroups[topic]) topicGroups[topic] = [];
+      topicGroups[topic].push(card);
+    }
 
-    const annotatedCards = cards
-      .map((card) => ({ card, status: getInsightStatus(card) }))
-      .sort((a, b) => {
-        const statusDiff = severityOrder[a.status] - severityOrder[b.status];
-        if (statusDiff !== 0) return statusDiff;
-        return (a.card.rank ?? 50) - (b.card.rank ?? 50);
-      });
-    const issueCards = annotatedCards.filter((item) => item.status === "abnormal");
-    const referenceCards = annotatedCards.filter((item) => item.status === "reference");
-    const normalCards = annotatedCards.filter((item) => item.status === "normal");
-    const hasError = annotatedCards.some((item) => item.card.level === "error");
-    const leadIssue = issueCards[0]?.card;
+    // Determine worst status per topic
+    const statusRank = { error: 0, warn: 1, reference: 2, ok: 3 };
+    const topicEntries = Object.entries(topicGroups).map(([topic, topicCards]) => {
+      let worstStatus = "ok";
+      for (const c of topicCards) {
+        const s = getCardStatus(c);
+        if (statusRank[s] < statusRank[worstStatus]) worstStatus = s;
+      }
+      return { topic, cards: topicCards, worstStatus };
+    });
+    topicEntries.sort((a, b) => statusRank[a.worstStatus] - statusRank[b.worstStatus]);
+
+    // Overall conclusion
+    const hasError = topicEntries.some((e) => e.worstStatus === "error");
+    const hasWarn = topicEntries.some((e) => e.worstStatus === "warn");
+    const issueCount = topicEntries.filter((e) => e.worstStatus === "error" || e.worstStatus === "warn").length;
+    const leadCard = topicEntries[0]?.cards[0];
+
     const summaryTitle = hasError
       ? "先处理训练异常"
-      : issueCards.length
+      : hasWarn
         ? "先测评，再按风险调整"
         : "训练过程正常，进入测评";
     const summaryText = hasError
-      ? `最优先处理：${leadIssue?.title || "训练异常"}。处理后再重新训练或测评。`
-      : issueCards.length
-        ? `有 ${issueCards.length} 个风险信号会影响效果判断。先用训练集外问题测评，如果效果不明显，再按风险项调整。`
-        : referenceCards.length
-          ? "训练过程没有明显失败信号。部分指标只能做参考，最终仍以训练前后回答对比为准。"
-          : "训练过程没有明显失败信号。下一步用真实问题对比训练前后的回答变化。";
-    const report = el("div", { class: "insight-report" });
+      ? `最优先处理：${leadCard?.title || "训练异常"}。处理后再重新训练或测评。`
+      : hasWarn
+        ? `有 ${issueCount} 个风险信号会影响效果判断。先用训练集外问题测评，如果效果不明显，再按风险项调整。`
+        : "训练过程没有明显失败信号。下一步用真实问题对比训练前后的回答变化。";
 
-    // 顶部统一行动按钮（按 action 类型去重）
-    const seenActions = new Set();
-    const actions = [];
-    for (const card of cards) {
-      if (!card.action) continue;
-      const key = card.action.action;
-      if (seenActions.has(key)) continue;
-      seenActions.add(key);
-      actions.push({ key, label: card.action.label });
-    }
-    if (!seenActions.has("goto_eval")) {
-      actions.push({ key: "goto_eval", label: "去测评" });
-      seenActions.add("goto_eval");
-    }
-    const actionPriority = hasError
-      ? { goto_data: 0, retrain: 1, goto_eval: 2 }
-      : { goto_eval: 0, goto_data: 1, retrain: 2 };
-    actions.sort((a, b) => (actionPriority[a.key] ?? 9) - (actionPriority[b.key] ?? 9));
-    const actionBtns = actions.map(({ key, label }) => {
-      const btn = el("button", { class: "insight-action-btn" }, label);
-      btn.addEventListener("click", () => {
-        if (key === "goto_eval") navigate(`/lab/${exp.id}`);
-        else if (key === "goto_data") navigate("/datasets");
-        else if (key === "retrain") navigate(`/new/${exp.id}`);
-      });
-      return btn;
+    const primaryAction = hasError
+      ? { label: "检查数据", action: "goto_data" }
+      : { label: "去测评", action: "goto_eval" };
+
+    // Build report
+    const report = el("div", { class: "dx-report" });
+
+    // Conclusion
+    const conclusionBtn = el("button", { class: "dx-conclusion-action" }, primaryAction.label);
+    conclusionBtn.addEventListener("click", () => {
+      if (primaryAction.action === "goto_eval") navigate(`/lab/${exp.id}`);
+      else if (primaryAction.action === "goto_data") navigate("/datasets");
     });
+    report.appendChild(el("div", { class: "dx-conclusion" }, [
+      el("div", { class: "dx-conclusion-body" }, [
+        el("h2", { class: "dx-conclusion-title" }, summaryTitle),
+        summaryText ? el("p", { class: "dx-conclusion-text" }, summaryText) : null,
+      ]),
+      conclusionBtn,
+    ]));
 
-    const renderStatus = (status) => {
-      const meta = statusMeta[status] || statusMeta.reference;
-      return el("span", { class: `insight-status insight-status-${meta.className}` }, meta.label);
-    };
-    const renderInsightCard = ({ card, status }, compact = false) => {
-      const topic = card.topic || "general";
-      const meta = topicMeta[topic] || topicMeta.general;
-      const details = buildDetails(card);
-      return el("article", { class: `insight-card insight-card-${status}${compact ? " insight-card-compact" : ""}` }, [
-        el("div", { class: "insight-card-head" }, [
-          el("div", { class: "insight-card-topic" }, [
-            el("span", { class: "insight-card-topic-title" }, meta.title),
-            el("span", { class: "insight-card-topic-sub" }, meta.sub),
-          ]),
-          renderStatus(status),
-        ]),
-        el("h3", { class: "insight-card-title" }, card.title),
-        card.observation
-          ? el("p", { class: "insight-card-observation" }, card.observation)
-          : null,
-        el("p", { class: "insight-card-next" }, card.next_step || card.suggestion || "先看训练前后的测评结果。"),
-        details.length
-          ? el("details", { class: "insight-card-details" }, [
-              el("summary", {}, "查看判断依据"),
-              el("div", { class: "insight-card-detail-body" },
-                details.map(([label, text]) =>
-                  el("p", {}, [
-                    el("strong", {}, `${label}：`),
-                    text,
-                  ])
-                )
-              ),
-            ])
-          : null,
-      ]);
-    };
-    const renderGroup = (title, caption, items, emptyText, compact = false) =>
-      el("div", { class: "insight-group" }, [
-        el("div", { class: "insight-group-head" }, [
-          el("div", {}, [
-            el("h3", {}, title),
-            caption ? el("p", {}, caption) : null,
-          ]),
-          el("span", { class: "insight-group-count tnum" }, String(items.length)),
-        ]),
-        items.length
-          ? el("div", { class: "insight-card-list" }, items.map((item) => renderInsightCard(item, compact)))
-          : el("p", { class: "insight-empty-line" }, emptyText),
-      ]);
+    // Checklist
+    const statusLabels = { ok: "正常", warn: "注意", error: "异常", reference: "参考" };
+    const chevronSvg = '<svg class="dx-chevron" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    const checklist = el("div", { class: "dx-checklist" });
 
-    report.appendChild(
-      el("div", { class: "insight-decision" }, [
-        el("div", { class: "insight-decision-main" }, [
-          el("div", { class: "insight-decision-kicker" }, "建议先做"),
-          el("h2", { class: "insight-decision-title" }, summaryTitle),
-          el("p", { class: "insight-decision-text" }, summaryText),
-        ]),
-        actionBtns.length
-          ? el("div", { class: "insight-report-actions" }, actionBtns)
-          : null,
-      ])
-    );
+    for (const entry of topicEntries) {
+      const meta = topicMeta[entry.topic] || topicMeta.general;
+      const row = el("div", { class: "dx-row" });
 
-    report.appendChild(
-      renderGroup(
-        "优先检查",
-        issueCards.length ? "这些信号最可能影响最终效果。" : "没有发现需要优先处理的问题。",
-        issueCards,
-        "训练过程没有明显异常。先进入测评，用训练集外的问题看回答是否真的变好。"
-      )
-    );
+      // Header
+      const dotMod = entry.worstStatus === "ok" ? ""
+        : entry.worstStatus === "error" ? " dx-row-dot-error"
+        : entry.worstStatus === "warn" ? " dx-row-dot-warn"
+        : " dx-row-dot-reference";
+      const header = el("div", { class: "dx-row-header" });
+      header.innerHTML = [
+        `<span class="dx-row-dot${dotMod}"></span>`,
+        `<span class="dx-row-info"><span class="dx-row-topic">${meta.title}</span><span class="dx-row-title">${entry.cards[0].title || ""}</span></span>`,
+        `<span class="dx-row-status dx-row-status-${entry.worstStatus}">${statusLabels[entry.worstStatus]}${chevronSvg}</span>`,
+      ].join("");
+      header.addEventListener("click", () => row.classList.toggle("dx-open"));
+      row.appendChild(header);
 
-    if (normalCards.length) {
-      report.appendChild(
-        el("details", { class: "insight-reference-fold insight-secondary-fold" }, [
-          el("summary", {}, [
-            el("span", {}, "正常项"),
-            el("span", { class: "tnum" }, String(normalCards.length)),
-          ]),
-          renderGroup("正常项", "这些检查暂时不需要处理。", normalCards, "", true),
-        ])
-      );
+      // Expanded findings
+      const expand = el("div", { class: "dx-expand" });
+      for (const card of entry.cards) {
+        const finding = el("div", { class: "dx-finding" });
+        finding.appendChild(el("h4", { class: "dx-finding-title" }, card.title));
+        if (card.observation) {
+          finding.appendChild(el("p", { class: "dx-finding-observation" }, card.observation));
+        }
+        finding.appendChild(el("p", { class: "dx-finding-next" }, card.next_step || card.suggestion || "先看训练前后的测评结果。"));
+
+        // Detail fold
+        const parts = [];
+        if (card.interpretation) parts.push(["怎么理解", card.interpretation]);
+        if (card.mechanism) parts.push(["背后原因", card.mechanism]);
+        if (card.how_to_tell) parts.push(["怎么分辨", card.how_to_tell]);
+        if (card.evidence) parts.push(["依据", card.evidence]);
+        if (parts.length) {
+          const details = el("details", { class: "dx-finding-details" });
+          details.appendChild(el("summary", {}, "判断依据"));
+          const body = el("div", { class: "dx-finding-details-body" });
+          for (const [label, text] of parts) {
+            body.appendChild(el("p", {}, [el("strong", {}, `${label}：`), text]));
+          }
+          details.appendChild(body);
+          finding.appendChild(details);
+        }
+
+        // Per-finding action (hide if same as primary)
+        if (card.action && card.action.action !== primaryAction.action) {
+          const actDiv = el("div", { class: "dx-finding-action" });
+          const actBtn = el("button", {}, card.action.label);
+          actBtn.addEventListener("click", () => {
+            if (card.action.action === "goto_eval") navigate(`/lab/${exp.id}`);
+            else if (card.action.action === "goto_data") navigate("/datasets");
+            else if (card.action.action === "retrain") navigate(`/new/${exp.id}`);
+          });
+          actDiv.appendChild(actBtn);
+          finding.appendChild(actDiv);
+        }
+        expand.appendChild(finding);
+      }
+      row.appendChild(expand);
+      checklist.appendChild(row);
     }
 
-    if (referenceCards.length) {
-      report.appendChild(
-        el("details", { class: "insight-reference-fold" }, [
-          el("summary", {}, [
-            el("span", {}, "参考项"),
-            el("span", { class: "tnum" }, String(referenceCards.length)),
-          ]),
-          renderGroup("参考项", "这些信号不能单独判断训练好坏，只作为测评前的背景。", referenceCards, "", true),
-        ])
-      );
-    }
-
+    report.appendChild(checklist);
     diagSection.appendChild(report);
     canvas.appendChild(diagSection);
   }
